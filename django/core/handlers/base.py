@@ -148,6 +148,11 @@ class BaseHandler(object):
                     try:
                         callback, param_dict = resolver.resolve404()
                         response = callback(request, **param_dict)
+
+                        if hasattr(response, 'render') and callable(response.render):
+                            for middleware_method in self._template_response_middleware:
+                                response = middleware_method(request, response)
+                            response = response.render()
                     except:
                         try:
                             response = self.handle_uncaught_exception(request, resolver, sys.exc_info())
@@ -163,11 +168,6 @@ class BaseHandler(object):
                 try:
                     callback, param_dict = resolver.resolve403()
                     response = callback(request, **param_dict)
-                    
-                    if hasattr(response, 'render') and callable(response.render):
-                        for middleware_method in self._template_response_middleware:
-                            response = middleware_method(request, response)
-                        response = response.render()
                 except:
                     try:
                         response = self.handle_uncaught_exception(request,
