@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 import datetime
 from decimal import Decimal
+from unittest import skipIf
 
 try:
     import pytz
@@ -10,14 +11,12 @@ except ImportError:
 from django.conf import settings
 from django.contrib.humanize.templatetags import humanize
 from django.template import Template, Context, defaultfilters
-from django.test import TestCase
-from django.test.utils import override_settings
+from django.test import TestCase, override_settings
+from django.test.utils import TransRealMixin
 from django.utils.html import escape
-from django.utils.timezone import utc
+from django.utils.timezone import utc, get_fixed_timezone
 from django.utils import translation
 from django.utils.translation import ugettext as _
-from django.utils import tzinfo
-from django.utils.unittest import skipIf
 
 
 # Mock out datetime in some tests so they don't fail occasionally when they
@@ -26,9 +25,10 @@ from django.utils.unittest import skipIf
 
 now = datetime.datetime(2012, 3, 9, 22, 30)
 
+
 class MockDateTime(datetime.datetime):
     @classmethod
-    def now(self, tz=None):
+    def now(cls, tz=None):
         if tz is None or tz.utcoffset(now) is None:
             return now
         else:
@@ -36,13 +36,13 @@ class MockDateTime(datetime.datetime):
             return now.replace(tzinfo=tz) + tz.utcoffset(now)
 
 
-class HumanizeTests(TestCase):
+class HumanizeTests(TransRealMixin, TestCase):
 
-    def humanize_tester(self, test_list, result_list, method):
+    def humanize_tester(self, test_list, result_list, method, normalize_result_func=escape):
         for test_content, result in zip(test_list, result_list):
             t = Template('{%% load humanize %%}{{ test_content|%s }}' % method)
             rendered = t.render(Context(locals())).strip()
-            self.assertEqual(rendered, escape(result),
+            self.assertEqual(rendered, normalize_result_func(result),
                              msg="%s test failed, produced '%s', should've produced '%s'" % (method, rendered, result))
 
     def test_ordinal(self):
@@ -55,6 +55,19 @@ class HumanizeTests(TestCase):
 
         with translation.override('en'):
             self.humanize_tester(test_list, result_list, 'ordinal')
+
+    def test_i18n_html_ordinal(self):
+        """Allow html in output on i18n strings"""
+        test_list = ('1', '2', '3', '4', '11', '12',
+                     '13', '101', '102', '103', '111',
+                     'something else', None)
+        result_list = ('1<sup>er</sup>', '2<sup>e</sup>', '3<sup>e</sup>', '4<sup>e</sup>',
+                       '11<sup>e</sup>', '12<sup>e</sup>', '13<sup>e</sup>', '101<sup>er</sup>',
+                       '102<sup>e</sup>', '103<sup>e</sup>', '111<sup>e</sup>', 'something else',
+                       'None')
+
+        with translation.override('fr-fr'):
+            self.humanize_tester(test_list, result_list, 'ordinal', lambda x: x)
 
     def test_intcomma(self):
         test_list = (100, 1000, 10123, 10311, 1000000, 1234567.25,
@@ -81,9 +94,8 @@ class HumanizeTests(TestCase):
 
     def test_intcomma_without_number_grouping(self):
         # Regression for #17414
-        with translation.override('ja'):
-            with self.settings(USE_L10N=True):
-                self.humanize_tester([100], ['100'], 'intcomma')
+        with translation.override('ja'), self.settings(USE_L10N=True):
+            self.humanize_tester([100], ['100'], 'intcomma')
 
     def test_intword(self):
         test_list = ('100', '1000000', '1200000', '1290000',
@@ -138,8 +150,8 @@ class HumanizeTests(TestCase):
 
     def test_naturalday_tz(self):
         today = datetime.date.today()
-        tz_one = tzinfo.FixedOffset(datetime.timedelta(hours=-12))
-        tz_two = tzinfo.FixedOffset(datetime.timedelta(hours=12))
+        tz_one = get_fixed_timezone(-720)
+        tz_two = get_fixed_timezone(720)
 
         # Can be today or yesterday
         date_one = datetime.datetime(today.year, today.month, today.day, tzinfo=tz_one)
@@ -195,22 +207,22 @@ class HumanizeTests(TestCase):
         result_list = [
             'now',
             'a second ago',
-            '30 seconds ago',
+            '30\xa0seconds ago',
             'a minute ago',
-            '2 minutes ago',
+            '2\xa0minutes ago',
             'an hour ago',
-            '23 hours ago',
-            '1 day ago',
-            '1 year, 4 months ago',
+            '23\xa0hours ago',
+            '1\xa0day ago',
+            '1\xa0year, 4\xa0months ago',
             'a second from now',
-            '30 seconds from now',
+            '30\xa0seconds from now',
             'a minute from now',
-            '2 minutes from now',
+            '2\xa0minutes from now',
             'an hour from now',
-            '23 hours from now',
-            '1 day from now',
-            '2 days, 6 hours from now',
-            '1 year, 4 months from now',
+            '23\xa0hours from now',
+            '1\xa0day from now',
+            '2\xa0days, 6\xa0hours from now',
+            '1\xa0year, 4\xa0months from now',
             'now',
             'now',
         ]
@@ -218,8 +230,8 @@ class HumanizeTests(TestCase):
         # date in naive arithmetic is only 2 days and 5 hours after in
         # aware arithmetic.
         result_list_with_tz_support = result_list[:]
-        assert result_list_with_tz_support[-4] == '2 days, 6 hours from now'
-        result_list_with_tz_support[-4] == '2 days, 5 hours from now'
+        assert result_list_with_tz_support[-4] == '2\xa0days, 6\xa0hours from now'
+        result_list_with_tz_support[-4] == '2\xa0days, 5\xa0hours from now'
 
         orig_humanize_datetime, humanize.datetime = humanize.datetime, MockDateTime
         try:

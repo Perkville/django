@@ -1,24 +1,20 @@
 from __future__ import unicode_literals
+from collections import OrderedDict
 import hashlib
+from importlib import import_module
 import os
 import posixpath
 import re
-try:
-    from urllib.parse import unquote, urlsplit, urlunsplit, urldefrag
-except ImportError:     # Python 2
-    from urllib import unquote
-    from urlparse import urlsplit, urlunsplit, urldefrag
 
 from django.conf import settings
-from django.core.cache import (get_cache, InvalidCacheBackendError,
+from django.core.cache import (caches, InvalidCacheBackendError,
                                cache as default_cache)
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage, get_storage_class
-from django.utils.datastructures import SortedDict
 from django.utils.encoding import force_bytes, force_text
 from django.utils.functional import LazyObject
-from django.utils.importlib import import_module
+from django.utils.six.moves.urllib.parse import unquote, urlsplit, urlunsplit, urldefrag
 from django.utils._os import upath
 
 from django.contrib.staticfiles.utils import check_settings, matches_patterns
@@ -39,6 +35,11 @@ class StaticFilesStorage(FileSystemStorage):
         check_settings(base_url)
         super(StaticFilesStorage, self).__init__(location, base_url,
                                                  *args, **kwargs)
+        # FileSystemStorage fallbacks to MEDIA_ROOT when location
+        # is empty, so we restore the empty value.
+        if not location:
+            self.base_location = None
+            self.location = None
 
     def path(self, name):
         if not self.location:
@@ -60,11 +61,11 @@ class CachedFilesMixin(object):
     def __init__(self, *args, **kwargs):
         super(CachedFilesMixin, self).__init__(*args, **kwargs)
         try:
-            self.cache = get_cache('staticfiles')
+            self.cache = caches['staticfiles']
         except InvalidCacheBackendError:
             # Use the default backend
             self.cache = default_cache
-        self._patterns = SortedDict()
+        self._patterns = OrderedDict()
         for extension, patterns in self.patterns:
             for pattern in patterns:
                 if isinstance(pattern, (tuple, list)):
@@ -202,7 +203,7 @@ class CachedFilesMixin(object):
 
     def post_process(self, paths, dry_run=False, **options):
         """
-        Post process the given list of files (called from collectstatic).
+        Post process the given OrderedDict of files (called from collectstatic).
 
         Processing is actually two separate operations:
 
@@ -251,7 +252,10 @@ class CachedFilesMixin(object):
                     for patterns in self._patterns.values():
                         for pattern, template in patterns:
                             converter = self.url_converter(name, template)
-                            content = pattern.sub(converter, content)
+                            try:
+                                content = pattern.sub(converter, content)
+                            except ValueError as exc:
+                                yield name, None, exc
                     if hashed_file_exists:
                         self.delete(hashed_name)
                     # then save the processed result

@@ -1,17 +1,17 @@
+from collections import OrderedDict
 import os
+
+from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files.storage import default_storage, Storage, FileSystemStorage
-from django.utils.datastructures import SortedDict
-from django.utils.functional import empty, memoize, LazyObject
+from django.utils.functional import empty, LazyObject
 from django.utils.module_loading import import_by_path
 from django.utils._os import safe_join
-from django.utils import six
+from django.utils import six, lru_cache
 
 from django.contrib.staticfiles import utils
 from django.contrib.staticfiles.storage import AppStaticStorage
-
-_finders = SortedDict()
 
 
 class BaseFinder(object):
@@ -27,7 +27,7 @@ class BaseFinder(object):
         the first found file path will be returned; if set
         to ``True`` a list of all found files paths is returned.
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of BaseFinder must provide a find() method')
 
     def list(self, ignore_patterns):
         """
@@ -35,7 +35,7 @@ class BaseFinder(object):
         a two item iterable consisting of the relative path and storage
         instance.
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of BaseFinder must provide a list() method')
 
 
 class FileSystemFinder(BaseFinder):
@@ -43,11 +43,11 @@ class FileSystemFinder(BaseFinder):
     A static files finder that uses the ``STATICFILES_DIRS`` setting
     to locate files.
     """
-    def __init__(self, apps=None, *args, **kwargs):
+    def __init__(self, app_names=None, *args, **kwargs):
         # List of locations with static files
         self.locations = []
         # Maps dir paths to an appropriate storage instance
-        self.storages = SortedDict()
+        self.storages = OrderedDict()
         if not isinstance(settings.STATICFILES_DIRS, (list, tuple)):
             raise ImproperlyConfigured(
                 "Your STATICFILES_DIRS setting is not a tuple or list; "
@@ -57,7 +57,7 @@ class FileSystemFinder(BaseFinder):
                 prefix, root = root
             else:
                 prefix = ''
-            if os.path.abspath(settings.STATIC_ROOT) == os.path.abspath(root):
+            if settings.STATIC_ROOT and os.path.abspath(settings.STATIC_ROOT) == os.path.abspath(root):
                 raise ImproperlyConfigured(
                     "The STATICFILES_DIRS setting should "
                     "not contain the STATIC_ROOT setting")
@@ -114,14 +114,15 @@ class AppDirectoriesFinder(BaseFinder):
     """
     storage_class = AppStaticStorage
 
-    def __init__(self, apps=None, *args, **kwargs):
+    def __init__(self, app_names=None, *args, **kwargs):
         # The list of apps that are handled
         self.apps = []
-        # Mapping of app module paths to storage instances
-        self.storages = SortedDict()
-        if apps is None:
-            apps = settings.INSTALLED_APPS
-        for app in apps:
+        # Mapping of app names to storage instances
+        self.storages = OrderedDict()
+        if app_names is None:
+            app_configs = apps.get_app_configs()
+            app_names = [app_config.name for app_config in app_configs]
+        for app in app_names:
             app_storage = self.storage_class(app)
             if os.path.isdir(app_storage.location):
                 self.storages[app] = app_storage
@@ -245,7 +246,7 @@ def find(path, all=False):
     if matches:
         return matches
     # No match.
-    return all and [] or None
+    return [] if all else None
 
 
 def get_finders():
@@ -253,7 +254,8 @@ def get_finders():
         yield get_finder(finder_path)
 
 
-def _get_finder(import_path):
+@lru_cache.lru_cache(maxsize=None)
+def get_finder(import_path):
     """
     Imports the staticfiles finder class described by import_path, where
     import_path is the full Python path to the class.
@@ -263,4 +265,3 @@ def _get_finder(import_path):
         raise ImproperlyConfigured('Finder "%s" is not a subclass of "%s"' %
                                    (Finder, BaseFinder))
     return Finder()
-get_finder = memoize(_get_finder, _finders, 1)

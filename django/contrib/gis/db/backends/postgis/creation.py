@@ -1,5 +1,4 @@
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
 from django.db.backends.postgresql_psycopg2.creation import DatabaseCreation
 from django.utils.functional import cached_property
 
@@ -90,7 +89,7 @@ class PostGISCreation(DatabaseCreation):
             self.connection.close()
             self.connection.settings_dict["NAME"] = test_database_name
             cursor = self.connection.cursor()
-            cursor.execute("CREATE EXTENSION postgis")
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS postgis")
             cursor.connection.commit()
 
         return test_database_name

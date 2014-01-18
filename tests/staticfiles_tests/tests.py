@@ -7,20 +7,21 @@ import posixpath
 import shutil
 import sys
 import tempfile
+import unittest
 
 from django.template import loader, Context
 from django.conf import settings
 from django.core.cache.backends.base import BaseCache
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-from django.test import TestCase
-from django.test.utils import override_settings
+from django.test import TestCase, override_settings
 from django.utils.encoding import force_text
 from django.utils.functional import empty
 from django.utils._os import rmtree_errorhandler, upath
 from django.utils import six
 
 from django.contrib.staticfiles import finders, storage
+from django.contrib.staticfiles.management.commands import collectstatic
 
 TEST_ROOT = os.path.dirname(upath(__file__))
 TEST_SETTINGS = {
@@ -53,7 +54,7 @@ class BaseStaticFilesTestCase(object):
         storage.staticfiles_storage._wrapped = empty
         # Clear the cached staticfile finders, so they are reinitialized every
         # run and pick up changes in settings.STATICFILES_DIRS.
-        finders._finders.clear()
+        finders.get_finder.cache_clear()
 
         testfiles_path = os.path.join(TEST_ROOT, 'apps', 'test', 'static', 'test')
         # To make sure SVN doesn't hangs itself with the non-ASCII characters
@@ -78,7 +79,7 @@ class BaseStaticFilesTestCase(object):
 
     def assertFileContains(self, filepath, text):
         self.assertIn(text, self._get_file(force_text(filepath)),
-                        "'%s' not in '%s'" % (text, filepath))
+                      "'%s' not in '%s'" % (text, filepath))
 
     def assertFileNotFound(self, filepath):
         self.assertRaises(IOError, self._get_file, filepath)
@@ -223,6 +224,17 @@ class TestFindStatic(CollectionTestCase, TestDefaults):
         self.assertIn('apps', force_text(lines[1]))
 
 
+class TestConfiguration(StaticFilesTestCase):
+    def test_location_empty(self):
+        err = six.StringIO()
+        for root in ['', None]:
+            with override_settings(STATIC_ROOT=root):
+                with six.assertRaisesRegex(
+                        self, ImproperlyConfigured,
+                        'without having set the STATIC_ROOT setting to a filesystem path'):
+                    call_command('collectstatic', interactive=False, verbosity=0, stderr=err)
+
+
 class TestCollection(CollectionTestCase, TestDefaults):
     """
     Test ``collectstatic`` management command.
@@ -244,7 +256,7 @@ class TestCollection(CollectionTestCase, TestDefaults):
 
 class TestCollectionClear(CollectionTestCase):
     """
-    Test the ``--clear`` option of the ``collectstatic`` managemenet command.
+    Test the ``--clear`` option of the ``collectstatic`` management command.
     """
     def run_collectstatic(self, **kwargs):
         clear_filepath = os.path.join(settings.STATIC_ROOT, 'cleared.txt')
@@ -296,7 +308,7 @@ class TestCollectionDryRun(CollectionTestCase, TestNoFilesCreated):
 class TestCollectionFilesOverride(CollectionTestCase):
     """
     Test overriding duplicated files by ``collectstatic`` management command.
-    Check for proper handling of apps order in INSTALLED_APPS even if file modification
+    Check for proper handling of apps order in installed apps even if file modification
     dates are in different order:
 
         'staticfiles_tests.apps.test',
@@ -312,7 +324,7 @@ class TestCollectionFilesOverride(CollectionTestCase):
         # prepare duplicate of file2.txt from no_label app
         # this file will have modification time older than no_label/static/file2.txt
         # anyway it should be taken to STATIC_ROOT because 'test' app is before
-        # 'no_label' app in INSTALLED_APPS
+        # 'no_label' app in installed apps
         self.testfile_path = os.path.join(TEST_ROOT, 'apps', 'test', 'static', 'file2.txt')
         with open(self.testfile_path, 'w+') as f:
             f.write('duplicate of file2.txt')
@@ -338,7 +350,7 @@ class TestCollectionFilesOverride(CollectionTestCase):
         self.assertFileContains('file2.txt', 'duplicate of file2.txt')
 
         # and now change modification time of no_label/static/file2.txt
-        # test app is first in INSTALLED_APPS so file2.txt should remain unmodified
+        # test app is first in installed apps so file2.txt should remain unmodified
         mtime = os.path.getmtime(self.testfile_path)
         atime = os.path.getatime(self.testfile_path)
         os.utime(self.orig_path, (mtime + 1, atime + 1))
@@ -360,7 +372,8 @@ class TestCollectionNonLocalStorage(CollectionTestCase, TestNoFilesCreated):
 
 
 # we set DEBUG to False here since the template tag wouldn't work otherwise
-@override_settings(**dict(TEST_SETTINGS,
+@override_settings(**dict(
+    TEST_SETTINGS,
     STATICFILES_STORAGE='django.contrib.staticfiles.storage.CachedStaticFilesStorage',
     DEBUG=False,
 ))
@@ -550,9 +563,25 @@ class TestCollectionCachedStorage(BaseCollectionTestCase,
             self.assertNotIn(b"cached/other.css", content)
             self.assertIn(b"other.d41d8cd98f00.css", content)
 
+    @override_settings(
+        STATICFILES_DIRS=(os.path.join(TEST_ROOT, 'project', 'faulty'),),
+        STATICFILES_FINDERS=('django.contrib.staticfiles.finders.FileSystemFinder',),
+    )
+    def test_post_processing_failure(self):
+        """
+        Test that post_processing indicates the origin of the error when it
+        fails. Regression test for #18986.
+        """
+        finders.get_finder.cache_clear()
+        err = six.StringIO()
+        with self.assertRaises(Exception):
+            call_command('collectstatic', interactive=False, verbosity=0, stderr=err)
+        self.assertEqual("Post-processing 'faulty.css' failed!\n\n", err.getvalue())
+
 
 # we set DEBUG to False here since the template tag wouldn't work otherwise
-@override_settings(**dict(TEST_SETTINGS,
+@override_settings(**dict(
+    TEST_SETTINGS,
     STATICFILES_STORAGE='staticfiles_tests.storage.SimpleCachedStaticFilesStorage',
     DEBUG=False,
 ))
@@ -635,8 +664,7 @@ class TestServeDisabled(TestServeStatic):
         settings.DEBUG = False
 
     def test_disabled_serving(self):
-        six.assertRaisesRegex(self, ImproperlyConfigured, 'The staticfiles view '
-            'can only be used in debug mode ', self._response, 'test.txt')
+        self.assertFileNotFound('test.txt')
 
 
 class TestServeStaticWithDefaultURL(TestServeStatic, TestDefaults):
@@ -740,6 +768,15 @@ class TestMiscFinder(TestCase):
         self.assertRaises(ImproperlyConfigured,
             finders.get_finder, 'foo.bar.FooBarFinder')
 
+    def test_cache(self):
+        finders.get_finder.cache_clear()
+        for n in range(10):
+            finders.get_finder(
+                'django.contrib.staticfiles.finders.FileSystemFinder')
+        cache_info = finders.get_finder.cache_info()
+        self.assertEqual(cache_info.hits, 9)
+        self.assertEqual(cache_info.currsize, 1)
+
     @override_settings(STATICFILES_DIRS='a string')
     def test_non_tuple_raises_exception(self):
         """
@@ -756,6 +793,107 @@ class TestMiscFinder(TestCase):
 class TestTemplateTag(StaticFilesTestCase):
 
     def test_template_tag(self):
-        self.assertStaticRenders("does/not/exist.png",
-                                   "/static/does/not/exist.png")
+        self.assertStaticRenders("does/not/exist.png", "/static/does/not/exist.png")
         self.assertStaticRenders("testfile.txt", "/static/testfile.txt")
+
+
+class TestAppStaticStorage(TestCase):
+    def setUp(self):
+        # Creates a python module foo_module in a directory with non ascii
+        # characters
+        self.search_path = 'search_path_\xc3\xbc'
+        os.mkdir(self.search_path)
+        module_path = os.path.join(self.search_path, 'foo_module')
+        os.mkdir(module_path)
+        self.init_file = open(os.path.join(module_path, '__init__.py'), 'w')
+        sys.path.append(os.path.abspath(self.search_path))
+
+    def tearDown(self):
+        self.init_file.close()
+        sys.path.remove(os.path.abspath(self.search_path))
+        shutil.rmtree(self.search_path)
+
+    def test_app_with_non_ascii_characters_in_path(self):
+        """
+        Regression test for #18404 - Tests AppStaticStorage with a module that
+        has non ascii characters in path and a non utf8 file system encoding
+        """
+        # set file system encoding to a non unicode encoding
+        old_enc_func = sys.getfilesystemencoding
+        sys.getfilesystemencoding = lambda: 'ISO-8859-1'
+        try:
+            st = storage.AppStaticStorage('foo_module')
+            st.path('bar')
+        finally:
+            sys.getfilesystemencoding = old_enc_func
+
+
+class CustomStaticFilesStorage(storage.StaticFilesStorage):
+    """
+    Used in TestStaticFilePermissions
+    """
+    def __init__(self, *args, **kwargs):
+        kwargs['file_permissions_mode'] = 0o640
+        kwargs['directory_permissions_mode'] = 0o740
+        super(CustomStaticFilesStorage, self).__init__(*args, **kwargs)
+
+
+@unittest.skipIf(sys.platform.startswith('win'),
+                 "Windows only partially supports chmod.")
+class TestStaticFilePermissions(BaseCollectionTestCase, StaticFilesTestCase):
+
+    command_params = {'interactive': False,
+                      'post_process': True,
+                      'verbosity': '0',
+                      'ignore_patterns': ['*.ignoreme'],
+                      'use_default_ignore_patterns': True,
+                      'clear': False,
+                      'link': False,
+                      'dry_run': False}
+
+    def setUp(self):
+        self.umask = 0o027
+        self.old_umask = os.umask(self.umask)
+        super(TestStaticFilePermissions, self).setUp()
+
+    def tearDown(self):
+        os.umask(self.old_umask)
+        super(TestStaticFilePermissions, self).tearDown()
+
+    # Don't run collectstatic command in this test class.
+    def run_collectstatic(self, **kwargs):
+        pass
+
+    @override_settings(FILE_UPLOAD_PERMISSIONS=0o655,
+                       FILE_UPLOAD_DIRECTORY_PERMISSIONS=0o765)
+    def test_collect_static_files_permissions(self):
+        collectstatic.Command().execute(**self.command_params)
+        test_file = os.path.join(settings.STATIC_ROOT, "test.txt")
+        test_dir = os.path.join(settings.STATIC_ROOT, "subdir")
+        file_mode = os.stat(test_file)[0] & 0o777
+        dir_mode = os.stat(test_dir)[0] & 0o777
+        self.assertEqual(file_mode, 0o655)
+        self.assertEqual(dir_mode, 0o765)
+
+    @override_settings(FILE_UPLOAD_PERMISSIONS=None,
+                       FILE_UPLOAD_DIRECTORY_PERMISSIONS=None)
+    def test_collect_static_files_default_permissions(self):
+        collectstatic.Command().execute(**self.command_params)
+        test_file = os.path.join(settings.STATIC_ROOT, "test.txt")
+        test_dir = os.path.join(settings.STATIC_ROOT, "subdir")
+        file_mode = os.stat(test_file)[0] & 0o777
+        dir_mode = os.stat(test_dir)[0] & 0o777
+        self.assertEqual(file_mode, 0o666 & ~self.umask)
+        self.assertEqual(dir_mode, 0o777 & ~self.umask)
+
+    @override_settings(FILE_UPLOAD_PERMISSIONS=0o655,
+                       FILE_UPLOAD_DIRECTORY_PERMISSIONS=0o765,
+                       STATICFILES_STORAGE='staticfiles_tests.tests.CustomStaticFilesStorage')
+    def test_collect_static_files_subclass_of_static_storage(self):
+        collectstatic.Command().execute(**self.command_params)
+        test_file = os.path.join(settings.STATIC_ROOT, "test.txt")
+        test_dir = os.path.join(settings.STATIC_ROOT, "subdir")
+        file_mode = os.stat(test_file)[0] & 0o777
+        dir_mode = os.stat(test_dir)[0] & 0o777
+        self.assertEqual(file_mode, 0o640)
+        self.assertEqual(dir_mode, 0o740)

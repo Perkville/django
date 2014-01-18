@@ -1,5 +1,3 @@
-from __future__ import absolute_import
-
 from django.contrib import admin
 from django.contrib.contenttypes import generic
 
@@ -8,6 +6,7 @@ from .models import (Media, PhoneNumber, Episode, EpisodeExtra, Contact,
 
 
 site = admin.AdminSite(name="admin")
+
 
 class MediaInline(generic.GenericTabularInline):
     model = Media

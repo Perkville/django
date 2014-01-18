@@ -1,4 +1,4 @@
-from __future__ import absolute_import
+from __future__ import unicode_literals
 
 from operator import attrgetter
 
@@ -19,7 +19,7 @@ class RecursiveM2MTests(TestCase):
         a.friends.add(b, c)
 
         # David is friends with Anne and Chuck - add in reverse direction
-        d.friends.add(a,c)
+        d.friends.add(a, c)
 
         # Who is friends with Anne?
         self.assertQuerysetEqual(

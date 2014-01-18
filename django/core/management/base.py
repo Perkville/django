@@ -3,15 +3,16 @@ Base classes for writing management commands (named commands which can
 be executed through ``django-admin.py`` or ``manage.py``).
 
 """
+from __future__ import unicode_literals
+
 import os
 import sys
+import warnings
 
 from optparse import make_option, OptionParser
-import traceback
 
 import django
-from django.core.exceptions import ImproperlyConfigured
-from django.core.management.color import color_style
+from django.core.management.color import color_style, no_style
 from django.utils.encoding import force_str
 from django.utils.six import StringIO
 
@@ -60,7 +61,7 @@ class OutputWrapper(object):
         return getattr(self._out, name)
 
     def write(self, msg, style_func=None, ending=None):
-        ending = ending is None and self.ending or ending
+        ending = self.ending if ending is None else ending
         if ending and not msg.endswith(ending):
             msg += ending
         style_func = [f for f in (style_func, self.style_func, lambda x:x)
@@ -112,8 +113,8 @@ class BaseCommand(object):
     ``args``
         A string listing the arguments accepted by the command,
         suitable for use in help messages; e.g., a command which takes
-        a list of application names might set this to '<appname
-        appname ...>'.
+        a list of application names might set this to '<app_label
+        app_label ...>'.
 
     ``can_import_settings``
         A boolean indicating whether the command needs to be able to
@@ -140,8 +141,8 @@ class BaseCommand(object):
         performed prior to executing the command. Default value is
         ``True``. To validate an individual application's models
         rather than all applications' models, call
-        ``self.validate(app)`` from ``handle()``, where ``app`` is the
-        application's Python module.
+        ``self.validate(app_config)`` from ``handle()``, where ``app_config``
+        is the application's configuration provided by the app registry.
 
     ``leave_locale_alone``
         A boolean indicating whether the locale set in settings should be
@@ -171,7 +172,9 @@ class BaseCommand(object):
         make_option('--pythonpath',
             help='A directory to add to the Python path, e.g. "/home/djangoprojects/myproject".'),
         make_option('--traceback', action='store_true',
-            help='Print traceback on exception'),
+            help='Raise on exception'),
+        make_option('--no-color', action='store_true', dest='no_color', default=False,
+            help="Don't colorize the command output."),
     )
     help = ''
     args = ''
@@ -231,7 +234,8 @@ class BaseCommand(object):
         Set up any environment changes requested (e.g., Python path
         and Django settings), then run this command. If the
         command raises a ``CommandError``, intercept it and print it sensibly
-        to stderr.
+        to stderr. If the ``--traceback`` option is present or the raised
+        ``Exception`` is not ``CommandError``, raise it.
         """
         parser = self.create_parser(argv[0], argv[1])
         options, args = parser.parse_args(argv[2:])
@@ -239,12 +243,12 @@ class BaseCommand(object):
         try:
             self.execute(*args, **options.__dict__)
         except Exception as e:
+            if options.traceback or not isinstance(e, CommandError):
+                raise
+
             # self.stderr is not guaranteed to be set here
             stderr = getattr(self, 'stderr', OutputWrapper(sys.stderr, self.style.ERROR))
-            if options.traceback or not isinstance(e, CommandError):
-                stderr.write(traceback.format_exc())
-            else:
-                stderr.write('%s: %s' % (e.__class__.__name__, e))
+            stderr.write('%s: %s' % (e.__class__.__name__, e))
             sys.exit(1)
 
     def execute(self, *args, **options):
@@ -254,10 +258,14 @@ class BaseCommand(object):
         ``self.requires_model_validation``, except if force-skipped).
         """
         self.stdout = OutputWrapper(options.get('stdout', sys.stdout))
-        self.stderr = OutputWrapper(options.get('stderr', sys.stderr), self.style.ERROR)
+        if options.get('no_color'):
+            self.style = no_style()
+            self.stderr = OutputWrapper(options.get('stderr', sys.stderr))
+        else:
+            self.stderr = OutputWrapper(options.get('stderr', sys.stderr), self.style.ERROR)
 
         if self.can_import_settings:
-            from django.conf import settings
+            from django.conf import settings  # NOQA
 
         saved_locale = None
         if not self.leave_locale_alone:
@@ -296,22 +304,22 @@ class BaseCommand(object):
             if saved_locale is not None:
                 translation.activate(saved_locale)
 
-    def validate(self, app=None, display_num_errors=False):
+    def validate(self, app_config=None, display_num_errors=False):
         """
         Validates the given app, raising CommandError for any errors.
 
-        If app is None, then this will validate all installed apps.
+        If app_config is None, then this will validate all installed apps.
 
         """
         from django.core.management.validation import get_validation_errors
         s = StringIO()
-        num_errors = get_validation_errors(s, app)
+        num_errors = get_validation_errors(s, app_config)
         if num_errors:
             s.seek(0)
             error_text = s.read()
             raise CommandError("One or more models did not validate:\n%s" % error_text)
         if display_num_errors:
-            self.stdout.write("%s error%s found" % (num_errors, num_errors != 1 and 's' or ''))
+            self.stdout.write("%s error%s found" % (num_errors, '' if num_errors == 1 else 's'))
 
     def handle(self, *args, **options):
         """
@@ -319,43 +327,59 @@ class BaseCommand(object):
         this method.
 
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of BaseCommand must provide a handle() method')
 
 
 class AppCommand(BaseCommand):
     """
-    A management command which takes one or more installed application
-    names as arguments, and does something with each of them.
+    A management command which takes one or more installed application labels
+    as arguments, and does something with each of them.
 
     Rather than implementing ``handle()``, subclasses must implement
-    ``handle_app()``, which will be called once for each application.
-
+    ``handle_app_config()``, which will be called once for each application.
     """
-    args = '<appname appname ...>'
+    args = '<app_label app_label ...>'
 
     def handle(self, *app_labels, **options):
-        from django.db import models
+        from django.apps import apps
         if not app_labels:
-            raise CommandError('Enter at least one appname.')
+            raise CommandError("Enter at least one application label.")
         try:
-            app_list = [models.get_app(app_label) for app_label in app_labels]
-        except (ImproperlyConfigured, ImportError) as e:
+            app_configs = [apps.get_app_config(app_label) for app_label in app_labels]
+        except (LookupError, ImportError) as e:
             raise CommandError("%s. Are you sure your INSTALLED_APPS setting is correct?" % e)
         output = []
-        for app in app_list:
-            app_output = self.handle_app(app, **options)
+        for app_config in app_configs:
+            app_output = self.handle_app_config(app_config, **options)
             if app_output:
                 output.append(app_output)
         return '\n'.join(output)
 
-    def handle_app(self, app, **options):
+    def handle_app_config(self, app_config, **options):
         """
-        Perform the command's actions for ``app``, which will be the
-        Python module corresponding to an application name given on
-        the command line.
-
+        Perform the command's actions for app_config, an AppConfig instance
+        corresponding to an application label given on the command line.
         """
-        raise NotImplementedError()
+        try:
+            # During the deprecation path, keep delegating to handle_app if
+            # handle_app_config isn't implemented in a subclass.
+            handle_app = self.handle_app
+        except AttributeError:
+            # Keep only this exception when the deprecation completes.
+            raise NotImplementedError(
+                "Subclasses of AppCommand must provide"
+                "a handle_app_config() method.")
+        else:
+            warnings.warn(
+                "AppCommand.handle_app() is superseded by "
+                "AppCommand.handle_app_config().",
+                PendingDeprecationWarning, stacklevel=2)
+            if app_config.models_module is None:
+                raise CommandError(
+                    "AppCommand cannot handle app '%s' in legacy mode "
+                    "because it doesn't have a models module."
+                    % app_config.label)
+            return handle_app(app_config.models_module, **options)
 
 
 class LabelCommand(BaseCommand):
@@ -391,7 +415,7 @@ class LabelCommand(BaseCommand):
         string as given on the command line.
 
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of LabelCommand must provide a handle_label() method')
 
 
 class NoArgsCommand(BaseCommand):
@@ -417,4 +441,4 @@ class NoArgsCommand(BaseCommand):
         Perform this command's actions.
 
         """
-        raise NotImplementedError()
+        raise NotImplementedError('subclasses of NoArgsCommand must provide a handle_noargs() method')

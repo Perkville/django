@@ -3,14 +3,19 @@ from __future__ import unicode_literals
 
 import warnings
 
-from django.forms import *
+from django.forms import (
+    CharField, ChoiceField, Form, HiddenInput, IntegerField, ModelForm,
+    ModelMultipleChoiceField, MultipleChoiceField, RadioSelect, Select,
+    TextInput,
+)
 from django.test import TestCase
 from django.utils.translation import ugettext_lazy, override
 
 from forms_tests.models import Cheese
+from django.test.utils import TransRealMixin
 
 
-class FormsRegressionsTestCase(TestCase):
+class FormsRegressionsTestCase(TransRealMixin, TestCase):
     def test_class(self):
         # Tests to prevent against recurrences of earlier bugs.
         extra_attrs = {'class': 'special'}
@@ -44,8 +49,8 @@ class FormsRegressionsTestCase(TestCase):
             field_2 = CharField(max_length=10, label=ugettext_lazy('field_2'), widget=TextInput(attrs={'id': 'field_2_id'}))
 
         f = SomeForm()
-        self.assertHTMLEqual(f['field_1'].label_tag(), '<label for="id_field_1">field_1</label>')
-        self.assertHTMLEqual(f['field_2'].label_tag(), '<label for="field_2_id">field_2</label>')
+        self.assertHTMLEqual(f['field_1'].label_tag(), '<label for="id_field_1">field_1:</label>')
+        self.assertHTMLEqual(f['field_2'].label_tag(), '<label for="field_2_id">field_2:</label>')
 
         # Unicode decoding problems...
         GENDERS = (('\xc5', 'En tied\xe4'), ('\xf8', 'Mies'), ('\xdf', 'Nainen'))
@@ -139,6 +144,7 @@ class FormsRegressionsTestCase(TestCase):
         class CheeseForm(ModelForm):
             class Meta:
                 model = Cheese
+                fields = '__all__'
 
         form = CheeseForm({
             'name': 'Brie',

@@ -17,6 +17,14 @@ from django.core.mail.message import (
     DEFAULT_ATTACHMENT_MIME_TYPE, make_msgid,
     BadHeaderError, forbid_multi_line_headers)
 
+__all__ = [
+    'CachedDnsName', 'DNS_NAME', 'EmailMessage', 'EmailMultiAlternatives',
+    'SafeMIMEText', 'SafeMIMEMultipart', 'DEFAULT_ATTACHMENT_MIME_TYPE',
+    'make_msgid', 'BadHeaderError', 'forbid_multi_line_headers',
+    'get_connection', 'send_mail', 'send_mass_mail', 'mail_admins',
+    'mail_managers',
+]
+
 
 def get_connection(backend=None, fail_silently=False, **kwds):
     """Load an email backend and return an instance of it.
@@ -32,7 +40,7 @@ def get_connection(backend=None, fail_silently=False, **kwds):
 
 def send_mail(subject, message, from_email, recipient_list,
               fail_silently=False, auth_user=None, auth_password=None,
-              connection=None):
+              connection=None, html_message=None):
     """
     Easy wrapper for sending a single message to a recipient list. All members
     of the recipient list will see the other recipients in the 'To' field.
@@ -46,8 +54,12 @@ def send_mail(subject, message, from_email, recipient_list,
     connection = connection or get_connection(username=auth_user,
                                     password=auth_password,
                                     fail_silently=fail_silently)
-    return EmailMessage(subject, message, from_email, recipient_list,
-                        connection=connection).send()
+    mail = EmailMultiAlternatives(subject, message, from_email, recipient_list,
+                                  connection=connection)
+    if html_message:
+        mail.attach_alternative(html_message, 'text/html')
+
+    return mail.send()
 
 
 def send_mass_mail(datatuple, fail_silently=False, auth_user=None,

@@ -1,5 +1,7 @@
 import os
 import time
+import threading
+import warnings
 
 from django.conf import settings
 from django.db import connections
@@ -9,10 +11,37 @@ from django.utils.functional import empty
 
 template_rendered = Signal(providing_args=["template", "context"])
 
-setting_changed = Signal(providing_args=["setting", "value"])
+setting_changed = Signal(providing_args=["setting", "value", "enter"])
 
 # Most setting_changed receivers are supposed to be added below,
 # except for cases where the receiver is related to a contrib app.
+
+# Settings that may not work well when using 'override_settings' (#19031)
+COMPLEX_OVERRIDE_SETTINGS = set(['DATABASES'])
+
+
+@receiver(setting_changed)
+def clear_cache_handlers(**kwargs):
+    if kwargs['setting'] == 'CACHES':
+        from django.core.cache import caches
+        caches._caches = threading.local()
+
+
+@receiver(setting_changed)
+def update_installed_apps(**kwargs):
+    if kwargs['setting'] == 'INSTALLED_APPS':
+        # Rebuild any AppDirectoriesFinder instance.
+        from django.contrib.staticfiles.finders import get_finder
+        get_finder.cache_clear()
+        # Rebuild app_template_dirs cache.
+        from django.template.loaders import app_directories as mod
+        mod.app_template_dirs = mod.calculate_app_template_dirs()
+        # Rebuild templatetags module cache.
+        from django.template import base
+        base.templatetags_modules[:] = []
+        # Rebuild management commands cache
+        from django.core.management import get_commands
+        get_commands.cache_clear()
 
 
 @receiver(setting_changed)
@@ -74,8 +103,18 @@ def language_changed(**kwargs):
         if kwargs['setting'] == 'LOCALE_PATHS':
             trans_real._translations = {}
 
+
 @receiver(setting_changed)
 def file_storage_changed(**kwargs):
     if kwargs['setting'] in ('MEDIA_ROOT', 'DEFAULT_FILE_STORAGE'):
         from django.core.files.storage import default_storage
         default_storage._wrapped = empty
+
+
+@receiver(setting_changed)
+def complex_setting_changed(**kwargs):
+    if kwargs['enter'] and kwargs['setting'] in COMPLEX_OVERRIDE_SETTINGS:
+        # Considering the current implementation of the signals framework,
+        # stacklevel=5 shows the line containing the override_settings call.
+        warnings.warn("Overriding setting %s can lead to unexpected behaviour."
+                      % kwargs['setting'], stacklevel=5)
