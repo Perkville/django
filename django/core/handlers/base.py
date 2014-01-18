@@ -149,6 +149,11 @@ class BaseHandler(object):
                 try:
                     callback, param_dict = resolver.resolve404()
                     response = callback(request, **param_dict)
+                    
+                    if hasattr(response, 'render') and callable(response.render):
+                        for middleware_method in self._template_response_middleware:
+                            response = middleware_method(request, response)
+                        response = response.render()
                 except:
                     signals.got_request_exception.send(sender=self.__class__, request=request)
                     response = self.handle_uncaught_exception(request, resolver, sys.exc_info())
