@@ -31,7 +31,7 @@ class MigrationAutodetector(object):
         to try and restrict to (restriction is not guaranteed)
         """
         changes = self._detect_changes()
-        changes = self._arrange_for_graph(changes, graph)
+        changes = self.arrange_for_graph(changes, graph)
         if trim_to_apps:
             changes = self._trim_to_apps(changes, trim_to_apps)
         return changes
@@ -72,8 +72,13 @@ class MigrationAutodetector(object):
                 if field.rel:
                     if field.rel.to:
                         related_fields.append((field.name, field.rel.to._meta.app_label, field.rel.to._meta.model_name))
-                    if hasattr(field.rel, "through") and not field.rel.though._meta.auto_created:
+                    if hasattr(field.rel, "through") and not field.rel.through._meta.auto_created:
                         related_fields.append((field.name, field.rel.through._meta.app_label, field.rel.through._meta.model_name))
+            for field in new_apps.get_model(app_label, model_name)._meta.local_many_to_many:
+                if field.rel.to:
+                    related_fields.append((field.name, field.rel.to._meta.app_label, field.rel.to._meta.model_name))
+                if hasattr(field.rel, "through") and not field.rel.through._meta.auto_created:
+                    related_fields.append((field.name, field.rel.through._meta.app_label, field.rel.through._meta.model_name))
             if related_fields:
                 pending_add[app_label, model_name] = related_fields
             else:
@@ -105,8 +110,12 @@ class MigrationAutodetector(object):
                     )
                 )
                 for field_name, other_app_label, other_model_name in related_fields:
-                    if app_label != other_app_label:
-                        self.add_dependency(app_label, other_app_label)
+                    # If it depends on a swappable something, add a dynamic depend'cy
+                    swappable_setting = new_apps.get_model(app_label, model_name)._meta.get_field_by_name(field_name)[0].swappable_setting
+                    if swappable_setting is not None:
+                        self.add_swappable_dependency(app_label, swappable_setting)
+                    elif app_label != other_app_label:
+                            self.add_dependency(app_label, other_app_label)
                 del pending_add[app_label, model_name]
             # Ah well, we'll need to split one. Pick deterministically.
             else:
@@ -140,7 +149,11 @@ class MigrationAutodetector(object):
                 ),
                 new=True,
             )
-            if app_label != other_app_label:
+            # If it depends on a swappable something, add a dynamic depend'cy
+            swappable_setting = new_apps.get_model(app_label, model_name)._meta.get_field_by_name(field_name)[0].swappable_setting
+            if swappable_setting is not None:
+                self.add_swappable_dependency(app_label, swappable_setting)
+            elif app_label != other_app_label:
                 self.add_dependency(app_label, other_app_label)
         # Removing models
         removed_models = set(old_model_keys) - set(new_model_keys)
@@ -156,6 +169,7 @@ class MigrationAutodetector(object):
         kept_models = set(old_model_keys).intersection(new_model_keys)
         old_fields = set()
         new_fields = set()
+        unique_together_operations = []
         for app_label, model_name in kept_models:
             old_model_state = self.from_state.models[app_label, model_name]
             new_model_state = self.to_state.models[app_label, model_name]
@@ -163,15 +177,16 @@ class MigrationAutodetector(object):
             # always come before AlterFields even on separate models)
             old_fields.update((app_label, model_name, x) for x, y in old_model_state.fields)
             new_fields.update((app_label, model_name, x) for x, y in new_model_state.fields)
-            # Unique_together changes
+            # Unique_together changes. Operations will be added to migration a
+            # bit later, after fields creation. See ticket #22035.
             if old_model_state.options.get("unique_together", set()) != new_model_state.options.get("unique_together", set()):
-                self.add_to_migration(
+                unique_together_operations.append((
                     app_label,
                     operations.AlterUniqueTogether(
                         name=model_name,
                         unique_together=new_model_state.options.get("unique_together", set()),
                     )
-                )
+                ))
         # New fields
         for app_label, model_name, field_name in new_fields - old_fields:
             old_model_state = self.from_state.models[app_label, model_name]
@@ -220,6 +235,10 @@ class MigrationAutodetector(object):
                         field=field,
                     )
                 )
+                new_field = new_apps.get_model(app_label, model_name)._meta.get_field_by_name(field_name)[0]
+                swappable_setting = getattr(new_field, 'swappable_setting', None)
+                if swappable_setting is not None:
+                    self.add_swappable_dependency(app_label, swappable_setting)
         # Old fields
         for app_label, model_name, field_name in old_fields - new_fields:
             old_model_state = self.from_state.models[app_label, model_name]
@@ -247,6 +266,8 @@ class MigrationAutodetector(object):
                         field=new_model_state.get_field_by_name(field_name),
                     )
                 )
+        for app_label, operation in unique_together_operations:
+            self.add_to_migration(app_label, operation)
         # Alright, now add internal dependencies
         for app_label, migrations in self.migrations.items():
             for m1, m2 in zip(migrations, migrations[1:]):
@@ -276,7 +297,14 @@ class MigrationAutodetector(object):
             dependency = (other_app_label, "__first__")
         self.migrations[app_label][-1].dependencies.append(dependency)
 
-    def _arrange_for_graph(self, changes, graph):
+    def add_swappable_dependency(self, app_label, setting_name):
+        """
+        Adds a dependency to the value of a swappable model setting.
+        """
+        dependency = ("__setting__", setting_name)
+        self.migrations[app_label][-1].dependencies.append(dependency)
+
+    def arrange_for_graph(self, changes, graph):
         """
         Takes in a result from changes() and a MigrationGraph,
         and fixes the names and dependencies of the changes so they
@@ -365,8 +393,9 @@ class MigrationAutodetector(object):
                 return "%s_%s" % (ops[0].model_name.lower(), ops[0].name.lower())
             elif isinstance(ops[0], operations.RemoveField):
                 return "remove_%s_%s" % (ops[0].model_name.lower(), ops[0].name.lower())
-        elif all(isinstance(o, operations.CreateModel) for o in ops):
-            return "_".join(sorted(o.name.lower() for o in ops))
+        elif len(ops) > 1:
+            if all(isinstance(o, operations.CreateModel) for o in ops):
+                return "_".join(sorted(o.name.lower() for o in ops))
         return "auto_%s" % datetime.datetime.now().strftime("%Y%m%d_%H%M")
 
     @classmethod

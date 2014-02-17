@@ -8,14 +8,17 @@ from django import forms
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.admin import widgets, helpers
-from django.contrib.admin.utils import (unquote, flatten_fieldsets, get_deleted_objects,
-    model_format_dict, NestedObjects, lookup_needs_distinct)
 from django.contrib.admin import validation
+from django.contrib.admin.checks import (BaseModelAdminChecks, ModelAdminChecks,
+    InlineModelAdminChecks)
+from django.contrib.admin.utils import (unquote, flatten_fieldsets,
+    get_deleted_objects, model_format_dict, NestedObjects,
+    lookup_needs_distinct)
 from django.contrib.admin.templatetags.admin_static import static
 from django.contrib.admin.templatetags.admin_urls import add_preserved_filters
 from django.contrib.auth import get_permission_codename
-from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import PermissionDenied, ValidationError, FieldError
+from django.core import checks
+from django.core.exceptions import PermissionDenied, ValidationError, FieldError, ImproperlyConfigured
 from django.core.paginator import Paginator
 from django.core.urlresolvers import reverse
 from django.db import models, transaction, router
@@ -30,16 +33,17 @@ from django.http import Http404, HttpResponseRedirect
 from django.http.response import HttpResponseBase
 from django.shortcuts import get_object_or_404
 from django.template.response import SimpleTemplateResponse, TemplateResponse
-from django.utils.decorators import method_decorator
-from django.utils.html import escape, escapejs
-from django.utils.safestring import mark_safe
 from django.utils import six
+from django.utils.decorators import method_decorator
 from django.utils.deprecation import RenameMethodsBase
+from django.utils.encoding import force_text
+from django.utils.encoding import python_2_unicode_compatible
+from django.utils.html import escape, escapejs
 from django.utils.http import urlencode
 from django.utils.text import capfirst, get_text_list
 from django.utils.translation import ugettext as _
 from django.utils.translation import ungettext
-from django.utils.encoding import force_text
+from django.utils.safestring import mark_safe
 from django.views.decorators.csrf import csrf_protect
 
 
@@ -48,6 +52,13 @@ TO_FIELD_VAR = '_to_field'
 
 
 HORIZONTAL, VERTICAL = 1, 2
+
+
+def get_content_type_for_model(obj):
+    # Since this module gets imported in the application's root package,
+    # it cannot import models from other applications at the module level.
+    from django.contrib.contenttypes.models import ContentType
+    return ContentType.objects.get_for_model(obj)
 
 
 def get_ul_class(radio_style):
@@ -103,13 +114,41 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
     ordering = None
     view_on_site = True
 
-    # validation
-    validator_class = validation.BaseValidator
+    # Validation of ModelAdmin definitions
+    # Old, deprecated style:
+    validator_class = None
+    default_validator_class = validation.BaseValidator
+    # New style:
+    checks_class = BaseModelAdminChecks
 
     @classmethod
     def validate(cls, model):
-        validator = cls.validator_class()
+        warnings.warn(
+            'ModelAdmin.validate() is deprecated. Use "check()" instead.',
+            PendingDeprecationWarning)
+        if cls.validator_class:
+            validator = cls.validator_class()
+        else:
+            validator = cls.default_validator_class()
         validator.validate(cls, model)
+
+    @classmethod
+    def check(cls, model, **kwargs):
+        if cls.validator_class:
+            warnings.warn(
+                'ModelAdmin.validator_class is deprecated. '
+                'ModeAdmin validators must be converted to use '
+                'the system check framework.',
+                PendingDeprecationWarning)
+            validator = cls.validator_class()
+            try:
+                validator.validate(cls, model)
+            except ImproperlyConfigured as e:
+                return [checks.Error(e.args[0], hint=None, obj=cls)]
+            else:
+                return []
+        else:
+            return cls.checks_class().check(cls, model, **kwargs)
 
     def __init__(self):
         self._orig_formfield_overrides = self.formfield_overrides
@@ -201,7 +240,7 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
         if related_admin is not None:
             ordering = related_admin.get_ordering(request)
             if ordering is not None and ordering != ():
-                return db_field.rel.to._default_manager.using(db).order_by(*ordering).complex_filter(db_field.rel.limit_choices_to)
+                return db_field.rel.to._default_manager.using(db).order_by(*ordering)
         return None
 
     def formfield_for_foreignkey(self, db_field, request=None, **kwargs):
@@ -258,7 +297,7 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
         elif self.view_on_site and hasattr(obj, 'get_absolute_url'):
             # use the ContentType lookup if view_on_site is True
             return reverse('admin:view_on_site', kwargs={
-                'content_type_id': ContentType.objects.get_for_model(obj).pk,
+                'content_type_id': get_content_type_for_model(obj).pk,
                 'object_id': obj.pk
             })
 
@@ -344,6 +383,9 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
         # ForeignKeyRawIdWidget, on the basis of ForeignKey.limit_choices_to,
         # are allowed to work.
         for l in model._meta.related_fkey_lookups:
+            # As ``limit_choices_to`` can be a callable, invoke it here.
+            if callable(l):
+                l = l()
             for k, v in widgets.url_params_from_lookup_dict(l).items():
                 if k == lookup and v == value:
                     return True
@@ -435,6 +477,7 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
         return request.user.has_perm("%s.%s" % (opts.app_label, codename))
 
 
+@python_2_unicode_compatible
 class ModelAdmin(BaseModelAdmin):
     "Encapsulates all admin options and functionality for a given model."
 
@@ -469,13 +512,19 @@ class ModelAdmin(BaseModelAdmin):
     actions_selection_counter = True
 
     # validation
-    validator_class = validation.ModelAdminValidator
+    # Old, deprecated style:
+    default_validator_class = validation.ModelAdminValidator
+    # New style:
+    checks_class = ModelAdminChecks
 
     def __init__(self, model, admin_site):
         self.model = model
         self.opts = model._meta
         self.admin_site = admin_site
         super(ModelAdmin, self).__init__()
+
+    def __str__(self):
+        return "%s.%s" % (self.model._meta.app_label, self.__class__.__name__)
 
     def get_inline_instances(self, request, obj=None):
         inline_instances = []
@@ -688,7 +737,7 @@ class ModelAdmin(BaseModelAdmin):
         from django.contrib.admin.models import LogEntry, ADDITION
         LogEntry.objects.log_action(
             user_id=request.user.pk,
-            content_type_id=ContentType.objects.get_for_model(object).pk,
+            content_type_id=get_content_type_for_model(object).pk,
             object_id=object.pk,
             object_repr=force_text(object),
             action_flag=ADDITION
@@ -703,7 +752,7 @@ class ModelAdmin(BaseModelAdmin):
         from django.contrib.admin.models import LogEntry, CHANGE
         LogEntry.objects.log_action(
             user_id=request.user.pk,
-            content_type_id=ContentType.objects.get_for_model(object).pk,
+            content_type_id=get_content_type_for_model(object).pk,
             object_id=object.pk,
             object_repr=force_text(object),
             action_flag=CHANGE,
@@ -712,15 +761,15 @@ class ModelAdmin(BaseModelAdmin):
 
     def log_deletion(self, request, object, object_repr):
         """
-        Log that an object will be deleted. Note that this method is called
-        before the deletion.
+        Log that an object will be deleted. Note that this method must be
+        called before the deletion.
 
         The default implementation creates an admin LogEntry object.
         """
         from django.contrib.admin.models import LogEntry, DELETION
         LogEntry.objects.log_action(
             user_id=request.user.pk,
-            content_type_id=ContentType.objects.get_for_model(self.model).pk,
+            content_type_id=get_content_type_for_model(object).pk,
             object_id=object.pk,
             object_repr=object_repr,
             action_flag=DELETION
@@ -1002,11 +1051,12 @@ class ModelAdmin(BaseModelAdmin):
             'absolute_url': view_on_site_url,
             'form_url': form_url,
             'opts': opts,
-            'content_type_id': ContentType.objects.get_for_model(self.model).id,
+            'content_type_id': get_content_type_for_model(self.model).pk,
             'save_as': self.save_as,
             'save_on_top': self.save_on_top,
             'to_field_var': TO_FIELD_VAR,
-            'is_popup_var': IS_POPUP_VAR
+            'is_popup_var': IS_POPUP_VAR,
+            'app_label': app_label,
         })
         if add and self.add_form_template is not None:
             form_template = self.add_form_template
@@ -1246,123 +1296,8 @@ class ModelAdmin(BaseModelAdmin):
                 "admin/delete_confirmation.html"
             ], context, current_app=self.admin_site.name)
 
-    @csrf_protect_m
-    @transaction.atomic
-    def add_view(self, request, form_url='', extra_context=None):
-        "The 'add' admin view for this model."
-        model = self.model
-        opts = model._meta
-
-        if not self.has_add_permission(request):
-            raise PermissionDenied
-
-        ModelForm = self.get_form(request)
-        if request.method == 'POST':
-            form = ModelForm(request.POST, request.FILES)
-            if form.is_valid():
-                new_object = self.save_form(request, form, change=False)
-                form_validated = True
-            else:
-                form_validated = False
-                new_object = form.instance
-            formsets, inline_instances = self._create_formsets(request, new_object)
-            if all_valid(formsets) and form_validated:
-                self.save_model(request, new_object, form, False)
-                self.save_related(request, form, formsets, False)
-                self.log_addition(request, new_object)
-                return self.response_add(request, new_object)
-        else:
-            # Prepare the dict of initial data from the request.
-            # We have to special-case M2Ms as a list of comma-separated PKs.
-            initial = dict(request.GET.items())
-            for k in initial:
-                try:
-                    f = opts.get_field(k)
-                except models.FieldDoesNotExist:
-                    continue
-                if isinstance(f, models.ManyToManyField):
-                    initial[k] = initial[k].split(",")
-            form = ModelForm(initial=initial)
-            formsets, inline_instances = self._create_formsets(request, self.model())
-
-        adminForm = helpers.AdminForm(form, list(self.get_fieldsets(request)),
-            self.get_prepopulated_fields(request),
-            self.get_readonly_fields(request),
-            model_admin=self)
-        media = self.media + adminForm.media
-
-        inline_admin_formsets = []
-        for inline, formset in zip(inline_instances, formsets):
-            fieldsets = list(inline.get_fieldsets(request))
-            readonly = list(inline.get_readonly_fields(request))
-            prepopulated = dict(inline.get_prepopulated_fields(request))
-            inline_admin_formset = helpers.InlineAdminFormSet(inline, formset,
-                fieldsets, prepopulated, readonly, model_admin=self)
-            inline_admin_formsets.append(inline_admin_formset)
-            media = media + inline_admin_formset.media
-
-        context = dict(self.admin_site.each_context(),
-            title=_('Add %s') % force_text(opts.verbose_name),
-            adminform=adminForm,
-            is_popup=(IS_POPUP_VAR in request.POST or
-                      IS_POPUP_VAR in request.GET),
-            to_field=request.POST.get(TO_FIELD_VAR,
-                                      request.GET.get(TO_FIELD_VAR)),
-            media=media,
-            inline_admin_formsets=inline_admin_formsets,
-            errors=helpers.AdminErrorList(form, formsets),
-            preserved_filters=self.get_preserved_filters(request),
-        )
-        context.update(extra_context or {})
-        return self.render_change_form(request, context, form_url=form_url, add=True)
-
-    @csrf_protect_m
-    @transaction.atomic
-    def change_view(self, request, object_id, form_url='', extra_context=None):
-        "The 'change' admin view for this model."
-        model = self.model
-        opts = model._meta
-
-        obj = self.get_object(request, unquote(object_id))
-
-        if not self.has_change_permission(request, obj):
-            raise PermissionDenied
-
-        if obj is None:
-            raise Http404(_('%(name)s object with primary key %(key)r does not exist.') % {'name': force_text(opts.verbose_name), 'key': escape(object_id)})
-
-        if request.method == 'POST' and "_saveasnew" in request.POST:
-            return self.add_view(request, form_url=reverse('admin:%s_%s_add' % (
-                opts.app_label, opts.model_name),
-                current_app=self.admin_site.name))
-
-        ModelForm = self.get_form(request, obj)
-        if request.method == 'POST':
-            form = ModelForm(request.POST, request.FILES, instance=obj)
-            if form.is_valid():
-                form_validated = True
-                new_object = self.save_form(request, form, change=True)
-            else:
-                form_validated = False
-                new_object = form.instance
-            formsets, inline_instances = self._create_formsets(request, new_object)
-            if all_valid(formsets) and form_validated:
-                self.save_model(request, new_object, form, True)
-                self.save_related(request, form, formsets, True)
-                change_message = self.construct_change_message(request, form, formsets)
-                self.log_change(request, new_object, change_message)
-                return self.response_change(request, new_object)
-
-        else:
-            form = ModelForm(instance=obj)
-            formsets, inline_instances = self._create_formsets(request, obj)
-
-        adminForm = helpers.AdminForm(form, self.get_fieldsets(request, obj),
-            self.get_prepopulated_fields(request, obj),
-            self.get_readonly_fields(request, obj),
-            model_admin=self)
-        media = self.media + adminForm.media
-
+    def get_inline_formsets(self, request, formsets, inline_instances,
+                            obj=None):
         inline_admin_formsets = []
         for inline, formset in zip(inline_instances, formsets):
             fieldsets = list(inline.get_fieldsets(request, obj))
@@ -1371,10 +1306,88 @@ class ModelAdmin(BaseModelAdmin):
             inline_admin_formset = helpers.InlineAdminFormSet(inline, formset,
                 fieldsets, prepopulated, readonly, model_admin=self)
             inline_admin_formsets.append(inline_admin_formset)
-            media = media + inline_admin_formset.media
+        return inline_admin_formsets
+
+    @csrf_protect_m
+    @transaction.atomic
+    def changeform_view(self, request, object_id=None, form_url='', extra_context=None):
+
+        model = self.model
+        opts = model._meta
+        add = object_id is None
+
+        if add:
+            if not self.has_add_permission(request):
+                raise PermissionDenied
+            obj = None
+
+        else:
+            obj = self.get_object(request, unquote(object_id))
+
+            if not self.has_change_permission(request, obj):
+                raise PermissionDenied
+
+            if obj is None:
+                raise Http404(_('%(name)s object with primary key %(key)r does not exist.') % {
+                    'name': force_text(opts.verbose_name), 'key': escape(object_id)})
+
+            if request.method == 'POST' and "_saveasnew" in request.POST:
+                return self.add_view(request, form_url=reverse('admin:%s_%s_add' % (
+                    opts.app_label, opts.model_name),
+                    current_app=self.admin_site.name))
+
+        ModelForm = self.get_form(request, obj)
+        if request.method == 'POST':
+            form = ModelForm(request.POST, request.FILES, instance=obj)
+            if form.is_valid():
+                form_validated = True
+                new_object = self.save_form(request, form, change=not add)
+            else:
+                form_validated = False
+                new_object = form.instance
+            formsets, inline_instances = self._create_formsets(request, new_object)
+            if all_valid(formsets) and form_validated:
+                self.save_model(request, new_object, form, not add)
+                self.save_related(request, form, formsets, not add)
+                if add:
+                    self.log_addition(request, new_object)
+                    return self.response_add(request, new_object)
+                else:
+                    change_message = self.construct_change_message(request, form, formsets)
+                    self.log_change(request, new_object, change_message)
+                    return self.response_change(request, new_object)
+        else:
+            if add:
+                # Prepare the dict of initial data from the request.
+                # We have to special-case M2Ms as a list of comma-separated PKs.
+                initial = dict(request.GET.items())
+                for k in initial:
+                    try:
+                        f = opts.get_field(k)
+                    except models.FieldDoesNotExist:
+                        continue
+                    if isinstance(f, models.ManyToManyField):
+                        initial[k] = initial[k].split(",")
+                form = ModelForm(initial=initial)
+                formsets, inline_instances = self._create_formsets(request, self.model())
+            else:
+                form = ModelForm(instance=obj)
+                formsets, inline_instances = self._create_formsets(request, obj)
+
+        adminForm = helpers.AdminForm(
+            form,
+            list(self.get_fieldsets(request, obj)),
+            self.get_prepopulated_fields(request, obj),
+            self.get_readonly_fields(request, obj),
+            model_admin=self)
+        media = self.media + adminForm.media
+
+        inline_formsets = self.get_inline_formsets(request, formsets, inline_instances, obj)
+        for inline_formset in inline_formsets:
+            media = media + inline_formset.media
 
         context = dict(self.admin_site.each_context(),
-            title=_('Change %s') % force_text(opts.verbose_name),
+            title=(_('Add %s') if add else _('Change %s')) % force_text(opts.verbose_name),
             adminform=adminForm,
             object_id=object_id,
             original=obj,
@@ -1383,13 +1396,20 @@ class ModelAdmin(BaseModelAdmin):
             to_field=request.POST.get(TO_FIELD_VAR,
                                       request.GET.get(TO_FIELD_VAR)),
             media=media,
-            inline_admin_formsets=inline_admin_formsets,
+            inline_admin_formsets=inline_formsets,
             errors=helpers.AdminErrorList(form, formsets),
-            app_label=opts.app_label,
             preserved_filters=self.get_preserved_filters(request),
         )
+
         context.update(extra_context or {})
-        return self.render_change_form(request, context, change=True, obj=obj, form_url=form_url)
+
+        return self.render_change_form(request, context, add=add, change=not add, obj=obj, form_url=form_url)
+
+    def add_view(self, request, form_url='', extra_context=None):
+        return self.changeform_view(request, None, form_url, extra_context)
+
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        return self.changeform_view(request, object_id, form_url, extra_context)
 
     @csrf_protect_m
     def changelist_view(self, request, extra_context=None):
@@ -1620,7 +1640,7 @@ class ModelAdmin(BaseModelAdmin):
         app_label = opts.app_label
         action_list = LogEntry.objects.filter(
             object_id=unquote(object_id),
-            content_type=ContentType.objects.get_for_model(model)
+            content_type=get_content_type_for_model(model)
         ).select_related().order_by('action_time')
 
         context = dict(self.admin_site.each_context(),
@@ -1685,8 +1705,7 @@ class InlineModelAdmin(BaseModelAdmin):
     verbose_name_plural = None
     can_delete = True
 
-    # validation
-    validator_class = validation.InlineValidator
+    checks_class = InlineModelAdminChecks
 
     def __init__(self, parent_model, admin_site):
         self.admin_site = admin_site

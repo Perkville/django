@@ -505,8 +505,9 @@ password resets. You must then provide some key implementation details:
 
         .. note::
 
-            ``REQUIRED_FIELDS`` must contain all required fields on your User
-            model, but should *not* contain the ``USERNAME_FIELD``.
+            ``REQUIRED_FIELDS`` must contain all required fields on your
+            ``User`` model, but should *not* contain the ``USERNAME_FIELD`` or
+            ``password`` as these fields will always be prompted for.
 
     .. attribute:: is_active
 
@@ -983,8 +984,7 @@ authentication app::
             # The user is identified by their email address
             return self.email
 
-        # On Python 3: def __str__(self):
-        def __unicode__(self):
+        def __str__(self):              # __unicode__ on Python 2
             return self.email
 
         def has_perm(self, perm, obj=None):

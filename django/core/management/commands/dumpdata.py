@@ -65,9 +65,8 @@ class Command(BaseCommand):
         excluded_models = set()
         for exclude in excludes:
             if '.' in exclude:
-                app_label, model_name = exclude.split('.', 1)
                 try:
-                    model = apps.get_model(app_label, model_name)
+                    model = apps.get_model(exclude)
                 except LookupError:
                     raise CommandError('Unknown model in excludes: %s' % exclude)
                 excluded_models.add(model)
@@ -98,13 +97,18 @@ class Command(BaseCommand):
                     if app_config.models_module is None or app_config in excluded_apps:
                         continue
                     try:
-                        model = apps.get_model(app_label, model_label)
+                        model = app_config.get_model(model_label)
                     except LookupError:
                         raise CommandError("Unknown model: %s.%s" % (app_label, model_label))
 
                     app_list_value = app_list.setdefault(app_config, [])
-                    if model not in app_list_value:
-                        app_list_value.append(model)
+
+                    # We may have previously seen a "all-models" request for
+                    # this app (no model qualifier was given). In this case
+                    # there is no need adding specific models to the list.
+                    if app_list_value is not None:
+                        if model not in app_list_value:
+                            app_list_value.append(model)
                 except ValueError:
                     if primary_keys:
                         raise CommandError("You can only use --pks option with one model")
@@ -177,7 +181,7 @@ def sort_dependencies(app_list):
             if hasattr(model, 'natural_key'):
                 deps = getattr(model.natural_key, 'dependencies', [])
                 if deps:
-                    deps = [apps.get_model(*d.split('.')) for d in deps]
+                    deps = [apps.get_model(dep) for dep in deps]
             else:
                 deps = []
 

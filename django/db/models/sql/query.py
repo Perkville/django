@@ -483,7 +483,7 @@ class Query(object):
         # Base table must be present in the query - this is the same
         # table on both sides.
         self.get_initial_alias()
-        joinpromoter = JoinPromoter(connector, 2)
+        joinpromoter = JoinPromoter(connector, 2, False)
         joinpromoter.add_votes(
             j for j in self.alias_map if self.alias_map[j].join_type == self.INNER)
         rhs_votes = set()
@@ -1061,7 +1061,7 @@ class Query(object):
         if (connections[DEFAULT_DB_ALIAS].features.interprets_empty_strings_as_nulls and
                 lookups[-1] == 'exact' and value == ''):
             value = True
-            lookups[-1] = ['isnull']
+            lookups[-1] = 'isnull'
         return value, lookups
 
     def solve_lookup_type(self, lookup):
@@ -1299,11 +1299,9 @@ class Query(object):
         connector = q_object.connector
         current_negated = current_negated ^ q_object.negated
         branch_negated = branch_negated or q_object.negated
-        # Note that if the connector happens to match what we have already in
-        # the tree, the add will be a no-op.
         target_clause = self.where_class(connector=connector,
                                          negated=q_object.negated)
-        joinpromoter = JoinPromoter(q_object.connector, len(q_object.children))
+        joinpromoter = JoinPromoter(q_object.connector, len(q_object.children), current_negated)
         for child in q_object.children:
             if isinstance(child, Node):
                 child_clause, needed_inner = self._add_q(
@@ -1334,6 +1332,7 @@ class Query(object):
         """
         path, names_with_path = [], []
         for pos, name in enumerate(names):
+            cur_names_with_path = (name, [])
             if name == 'pk':
                 name = opts.pk.name
             try:
@@ -1359,19 +1358,22 @@ class Query(object):
                         targets = (final_field.rel.get_related_field(),)
                         opts = int_model._meta
                         path.append(PathInfo(final_field.model._meta, opts, targets, final_field, False, True))
+                        cur_names_with_path[1].append(PathInfo(final_field.model._meta, opts, targets, final_field, False, True))
             if hasattr(field, 'get_path_info'):
                 pathinfos = field.get_path_info()
                 if not allow_many:
                     for inner_pos, p in enumerate(pathinfos):
                         if p.m2m:
-                            names_with_path.append((name, pathinfos[0:inner_pos + 1]))
+                            cur_names_with_path[1].extend(pathinfos[0:inner_pos + 1])
+                            names_with_path.append(cur_names_with_path)
                             raise MultiJoin(pos + 1, names_with_path)
                 last = pathinfos[-1]
                 path.extend(pathinfos)
                 final_field = last.join_field
                 opts = last.to_opts
                 targets = last.target_fields
-                names_with_path.append((name, pathinfos))
+                cur_names_with_path[1].extend(pathinfos)
+                names_with_path.append(cur_names_with_path)
             else:
                 # Local non-relational field.
                 final_field = field
@@ -2009,8 +2011,16 @@ class JoinPromoter(object):
     conditions.
     """
 
-    def __init__(self, connector, num_children):
+    def __init__(self, connector, num_children, negated):
         self.connector = connector
+        self.negated = negated
+        if self.negated:
+            if connector == AND:
+                self.effective_connector = OR
+            else:
+                self.effective_connector = AND
+        else:
+            self.effective_connector = self.connector
         self.num_children = num_children
         # Maps of table alias to how many times it is seen as required for
         # inner and/or outer joins.
@@ -2034,6 +2044,8 @@ class JoinPromoter(object):
         """
         to_promote = set()
         to_demote = set()
+        # The effective_connector is used so that NOT (a AND b) is treated
+        # similarly to (a OR b) for join promotion.
         for table, votes in self.inner_votes.items():
             # We must use outer joins in OR case when the join isn't contained
             # in all of the joins. Otherwise the INNER JOIN itself could remove
@@ -2045,7 +2057,7 @@ class JoinPromoter(object):
             # to rel_a would remove a valid match from the query. So, we need
             # to promote any existing INNER to LOUTER (it is possible this
             # promotion in turn will be demoted later on).
-            if self.connector == 'OR' and votes < self.num_children:
+            if self.effective_connector == 'OR' and votes < self.num_children:
                 to_promote.add(table)
             # If connector is AND and there is a filter that can match only
             # when there is a joinable row, then use INNER. For example, in
@@ -2057,8 +2069,8 @@ class JoinPromoter(object):
             #     (rel_a__col__icontains=Alex | rel_a__col__icontains=Russell)
             # then if rel_a doesn't produce any rows, the whole condition
             # can't match. Hence we can safely use INNER join.
-            if self.connector == 'AND' or (self.connector == 'OR' and
-                                           votes == self.num_children):
+            if self.effective_connector == 'AND' or (
+                    self.effective_connector == 'OR' and votes == self.num_children):
                 to_demote.add(table)
             # Finally, what happens in cases where we have:
             #    (rel_a__col=1|rel_b__col=2) & rel_a__col__gte=0

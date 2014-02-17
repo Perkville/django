@@ -1,13 +1,13 @@
 from __future__ import unicode_literals
 
 import os
-import sys
 from collections import OrderedDict
 from optparse import make_option
 
 from django.core.files.storage import FileSystemStorage
 from django.core.management.base import CommandError, NoArgsCommand
 from django.utils.encoding import smart_text
+from django.utils.functional import LazyObject
 from django.utils.six.moves import input
 
 from django.contrib.staticfiles import finders, storage
@@ -45,7 +45,7 @@ class Command(NoArgsCommand):
                 "'.*' and '*~'."),
     )
     help = "Collect static files in a single location."
-    requires_model_validation = False
+    requires_system_checks = False
 
     def __init__(self, *args, **kwargs):
         super(NoArgsCommand, self).__init__(*args, **kwargs)
@@ -82,12 +82,8 @@ class Command(NoArgsCommand):
 
         Split off from handle_noargs() to facilitate testing.
         """
-        if self.symlink:
-            if sys.platform == 'win32':
-                raise CommandError("Symlinking is not supported by this "
-                                   "platform (%s)." % sys.platform)
-            if not self.local:
-                raise CommandError("Can't symlink to a remote destination.")
+        if self.symlink and not self.local:
+            raise CommandError("Can't symlink to a remote destination.")
 
         if self.clear:
             self.clear_dir('')
@@ -149,8 +145,7 @@ class Command(NoArgsCommand):
             'location as specified in your settings'
         )
 
-        if (isinstance(self.storage._wrapped, FileSystemStorage) and
-                self.storage.location):
+        if self.is_local_storage() and self.storage.location:
             destination_path = self.storage.location
             message.append(':\n\n    %s\n\n' % destination_path)
         else:
@@ -196,6 +191,13 @@ class Command(NoArgsCommand):
         """
         if self.verbosity >= level:
             self.stdout.write(msg)
+
+    def is_local_storage(self):
+        if issubclass(self.storage.__class__, LazyObject):
+            storage = self.storage._wrapped
+        else:
+            storage = self.storage
+        return isinstance(storage, FileSystemStorage)
 
     def clear_dir(self, path):
         """
@@ -279,7 +281,20 @@ class Command(NoArgsCommand):
                 os.makedirs(os.path.dirname(full_path))
             except OSError:
                 pass
-            os.symlink(source_path, full_path)
+            try:
+                if os.path.lexists(full_path):
+                    os.unlink(full_path)
+                os.symlink(source_path, full_path)
+            except AttributeError:
+                import platform
+                raise CommandError("Symlinking is not supported by Python %s." %
+                                   platform.python_version())
+            except NotImplementedError:
+                import platform
+                raise CommandError("Symlinking is not supported in this "
+                                   "platform (%s)." % platform.platform())
+            except OSError as e:
+                raise CommandError(e)
         if prefixed_path not in self.symlinked_files:
             self.symlinked_files.append(prefixed_path)
 

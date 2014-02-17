@@ -13,11 +13,10 @@ from django.template.defaultfilters import (
     linebreaks_filter, linenumbers, ljust, lower, make_list,
     phone2numeric_filter, pluralize, removetags, rjust, slice_filter, slugify,
     stringformat, striptags, time, timesince_filter, timeuntil_filter, title,
-    truncatewords, truncatewords_html, unordered_list, upper, urlencode,
-    urlize, urlizetrunc, wordcount, wordwrap, yesno,
+    truncatechars_html, truncatewords, truncatewords_html, unordered_list,
+    upper, urlencode, urlize, urlizetrunc, wordcount, wordwrap, yesno,
 )
 from django.test import TestCase
-from django.test.utils import TransRealMixin
 from django.utils import six
 from django.utils import translation
 from django.utils.safestring import SafeData
@@ -195,6 +194,23 @@ class DefaultFiltersTests(TestCase):
         self.assertEqual(truncatewords_html('<i>Buenos d&iacute;as! '
             '&#x00bf;C&oacute;mo est&aacute;?</i>', 3),
             '<i>Buenos d&iacute;as! &#x00bf;C&oacute;mo ...</i>')
+
+    def test_truncatechars_html(self):
+        self.assertEqual(truncatechars_html(
+            '<p>one <a href="#">two - three <br>four</a> five</p>', 0), '...')
+        self.assertEqual(truncatechars_html('<p>one <a href="#">two - '
+            'three <br>four</a> five</p>', 6),
+            '<p>one...</p>')
+        self.assertEqual(truncatechars_html(
+            '<p>one <a href="#">two - three <br>four</a> five</p>', 11),
+            '<p>one <a href="#">two ...</a></p>')
+        self.assertEqual(truncatechars_html(
+            '<p>one <a href="#">two - three <br>four</a> five</p>', 100),
+            '<p>one <a href="#">two - three <br>four</a> five</p>')
+        self.assertEqual(truncatechars_html(
+            '<b>\xc5ngstr\xf6m</b> was here', 5), '<b>\xc5n...</b>')
+        self.assertEqual(truncatechars_html(
+            'a<b>b</b>c', 3), 'a<b>b</b>c')
 
     def test_upper(self):
         self.assertEqual(upper('Mixed case input'), 'MIXED CASE INPUT')
@@ -683,11 +699,11 @@ class DefaultFiltersTests(TestCase):
         self.assertEqual(striptags(123), '123')
 
 
-class DefaultFiltersI18NTests(TransRealMixin, TestCase):
+class DefaultFiltersI18NTests(TestCase):
 
     def test_localized_filesizeformat(self):
         # NOTE: \xa0 avoids wrapping between value and unit
-        with self.settings(USE_L10N=True), translation.override('de', deactivate=True):
+        with self.settings(USE_L10N=True), translation.override('de'):
             self.assertEqual(filesizeformat(1023), '1023\xa0Bytes')
             self.assertEqual(filesizeformat(1024), '1,0\xa0KB')
             self.assertEqual(filesizeformat(10 * 1024), '10,0\xa0KB')

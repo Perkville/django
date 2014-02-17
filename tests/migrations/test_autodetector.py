@@ -1,5 +1,5 @@
 # encoding: utf8
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ProjectState, ModelState
@@ -16,8 +16,10 @@ class AutodetectorTests(TestCase):
     author_name = ModelState("testapp", "Author", [("id", models.AutoField(primary_key=True)), ("name", models.CharField(max_length=200))])
     author_name_longer = ModelState("testapp", "Author", [("id", models.AutoField(primary_key=True)), ("name", models.CharField(max_length=400))])
     author_name_renamed = ModelState("testapp", "Author", [("id", models.AutoField(primary_key=True)), ("names", models.CharField(max_length=200))])
+    author_name_default = ModelState("testapp", "Author", [("id", models.AutoField(primary_key=True)), ("name", models.CharField(max_length=200, default='Ada Lovelace'))])
     author_with_book = ModelState("testapp", "Author", [("id", models.AutoField(primary_key=True)), ("name", models.CharField(max_length=200)), ("book", models.ForeignKey("otherapp.Book"))])
     author_with_publisher = ModelState("testapp", "Author", [("id", models.AutoField(primary_key=True)), ("name", models.CharField(max_length=200)), ("publisher", models.ForeignKey("testapp.Publisher"))])
+    author_with_custom_user = ModelState("testapp", "Author", [("id", models.AutoField(primary_key=True)), ("name", models.CharField(max_length=200)), ("user", models.ForeignKey("thirdapp.CustomUser"))])
     author_proxy = ModelState("testapp", "AuthorProxy", [], {"proxy": True}, ("testapp.author", ))
     author_proxy_notproxy = ModelState("testapp", "AuthorProxy", [], {}, ("testapp.author", ))
     publisher = ModelState("testapp", "Publisher", [("id", models.AutoField(primary_key=True)), ("name", models.CharField(max_length=100))])
@@ -28,7 +30,9 @@ class AutodetectorTests(TestCase):
     book = ModelState("otherapp", "Book", [("id", models.AutoField(primary_key=True)), ("author", models.ForeignKey("testapp.Author")), ("title", models.CharField(max_length=200))])
     book_unique = ModelState("otherapp", "Book", [("id", models.AutoField(primary_key=True)), ("author", models.ForeignKey("testapp.Author")), ("title", models.CharField(max_length=200))], {"unique_together": [("author", "title")]})
     book_unique_2 = ModelState("otherapp", "Book", [("id", models.AutoField(primary_key=True)), ("author", models.ForeignKey("testapp.Author")), ("title", models.CharField(max_length=200))], {"unique_together": [("title", "author")]})
+    book_unique_3 = ModelState("otherapp", "Book", [("id", models.AutoField(primary_key=True)), ("newfield", models.IntegerField()), ("author", models.ForeignKey("testapp.Author")), ("title", models.CharField(max_length=200))], {"unique_together": [("title", "newfield")]})
     edition = ModelState("thirdapp", "Edition", [("id", models.AutoField(primary_key=True)), ("book", models.ForeignKey("otherapp.Book"))])
+    custom_user = ModelState("thirdapp", "CustomUser", [("id", models.AutoField(primary_key=True)), ("username", models.CharField(max_length=255))])
 
     def make_project_state(self, model_states):
         "Shortcut to make ProjectStates from lists of predefined models"
@@ -52,7 +56,7 @@ class AutodetectorTests(TestCase):
         autodetector = MigrationAutodetector(before, after)
         changes = autodetector._detect_changes()
         # Run through arrange_for_graph
-        changes = autodetector._arrange_for_graph(changes, graph)
+        changes = autodetector.arrange_for_graph(changes, graph)
         # Make sure there's a new name, deps match, etc.
         self.assertEqual(changes["testapp"][0].name, "0003_author")
         self.assertEqual(changes["testapp"][0].dependencies, [("testapp", "0002_foobar")])
@@ -68,7 +72,7 @@ class AutodetectorTests(TestCase):
         changes = autodetector._detect_changes()
         # Run through arrange_for_graph
         graph = MigrationGraph()
-        changes = autodetector._arrange_for_graph(changes, graph)
+        changes = autodetector.arrange_for_graph(changes, graph)
         changes["testapp"][0].dependencies.append(("otherapp", "0001_initial"))
         changes = autodetector._trim_to_apps(changes, set(["testapp"]))
         # Make sure there's the right set of migrations
@@ -331,6 +335,24 @@ class AutodetectorTests(TestCase):
         self.assertEqual(action.name, "book")
         self.assertEqual(action.unique_together, set([("title", "author")]))
 
+    def test_add_field_and_unique_together(self):
+        "Tests that added fields will be created before using them in unique together"
+        before = self.make_project_state([self.author_empty, self.book])
+        after = self.make_project_state([self.author_empty, self.book_unique_3])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        # Right number of migrations?
+        self.assertEqual(len(changes['otherapp']), 1)
+        # Right number of actions?
+        migration = changes['otherapp'][0]
+        self.assertEqual(len(migration.operations), 2)
+        # Right actions order?
+        action1 = migration.operations[0]
+        action2 = migration.operations[1]
+        self.assertEqual(action1.__class__.__name__, "AddField")
+        self.assertEqual(action2.__class__.__name__, "AlterUniqueTogether")
+        self.assertEqual(action2.unique_together, set([("title", "newfield")]))
+
     def test_proxy_ignorance(self):
         "Tests that the autodetector correctly ignores proxy models"
         # First, we test adding a proxy model
@@ -355,3 +377,34 @@ class AutodetectorTests(TestCase):
         action = migration.operations[0]
         self.assertEqual(action.__class__.__name__, "CreateModel")
         self.assertEqual(action.name, "AuthorProxy")
+
+    @override_settings(AUTH_USER_MODEL="thirdapp.CustomUser")
+    def test_swappable(self):
+        before = self.make_project_state([self.custom_user])
+        after = self.make_project_state([self.custom_user, self.author_with_custom_user])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        # Right number of migrations?
+        self.assertEqual(len(changes), 1)
+        # Check the dependency is correct
+        migration = changes['testapp'][0]
+        self.assertEqual(migration.dependencies, [("__setting__", "AUTH_USER_MODEL")])
+
+    def test_add_field_with_default(self):
+        """
+        Adding a field with a default should work (#22030).
+        """
+        # Make state
+        before = self.make_project_state([self.author_empty])
+        after = self.make_project_state([self.author_name_default])
+        autodetector = MigrationAutodetector(before, after)
+        changes = autodetector._detect_changes()
+        # Right number of migrations?
+        self.assertEqual(len(changes['testapp']), 1)
+        # Right number of actions?
+        migration = changes['testapp'][0]
+        self.assertEqual(len(migration.operations), 1)
+        # Right action?
+        action = migration.operations[0]
+        self.assertEqual(action.__class__.__name__, "AddField")
+        self.assertEqual(action.name, "name")

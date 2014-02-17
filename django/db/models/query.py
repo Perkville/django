@@ -14,6 +14,7 @@ from django.db.models.fields import AutoField, Empty
 from django.db.models.query_utils import (Q, select_related_descend,
     deferred_class_factory, InvalidQuery)
 from django.db.models.deletion import Collector
+from django.db.models.sql.constants import CURSOR
 from django.db.models import sql
 from django.utils.functional import partition
 from django.utils import six
@@ -574,7 +575,7 @@ class QuerySet(object):
         query = self.query.clone(sql.UpdateQuery)
         query.add_update_values(kwargs)
         with transaction.commit_on_success_unless_managed(using=self.db):
-            rows = query.get_compiler(self.db).execute_sql(None)
+            rows = query.get_compiler(self.db).execute_sql(CURSOR)
         self._result_cache = None
         return rows
     update.alters_data = True
@@ -591,7 +592,7 @@ class QuerySet(object):
         query = self.query.clone(sql.UpdateQuery)
         query.add_update_fields(values)
         self._result_cache = None
-        return query.get_compiler(self.db).execute_sql(None)
+        return query.get_compiler(self.db).execute_sql(CURSOR)
     _update.alters_data = True
     _update.queryset_only = False
 
@@ -1059,6 +1060,12 @@ class ValuesQuerySet(QuerySet):
         # QuerySet.clone() will also set up the _fields attribute with the
         # names of the model fields to select.
 
+    def only(self, *fields):
+        raise NotImplementedError("ValuesQuerySet does not implement only()")
+
+    def defer(self, *fields):
+        raise NotImplementedError("ValuesQuerySet does not implement defer()")
+
     def iterator(self):
         # Purge any extra columns that haven't been explicitly asked for
         extra_names = list(self.query.extra_select)
@@ -1415,9 +1422,12 @@ def get_cached_row(row, index_start, using, klass_info, offset=0,
     klass, field_names, field_count, related_fields, reverse_related_fields, pk_idx = klass_info
 
     fields = row[index_start:index_start + field_count]
-    # If the pk column is None (or the Oracle equivalent ''), then the related
+    # If the pk column is None (or the equivalent '' in the case the
+    # connection interprets empty strings as nulls), then the related
     # object must be non-existent - set the relation to None.
-    if fields[pk_idx] is None or fields[pk_idx] == '':
+    if (fields[pk_idx] is None or
+        (connections[using].features.interprets_empty_strings_as_nulls and
+         fields[pk_idx] == '')):
         obj = None
     elif field_names:
         fields = list(fields)
@@ -1521,54 +1531,59 @@ class RawQuerySet(object):
 
         query = iter(self.query)
 
-        # Find out which columns are model's fields, and which ones should be
-        # annotated to the model.
-        for pos, column in enumerate(self.columns):
-            if column in self.model_fields:
-                model_init_field_names[self.model_fields[column].attname] = pos
-            else:
-                annotation_fields.append((column, pos))
+        try:
+            # Find out which columns are model's fields, and which ones should be
+            # annotated to the model.
+            for pos, column in enumerate(self.columns):
+                if column in self.model_fields:
+                    model_init_field_names[self.model_fields[column].attname] = pos
+                else:
+                    annotation_fields.append((column, pos))
 
-        # Find out which model's fields are not present in the query.
-        skip = set()
-        for field in self.model._meta.fields:
-            if field.attname not in model_init_field_names:
-                skip.add(field.attname)
-        if skip:
-            if self.model._meta.pk.attname in skip:
-                raise InvalidQuery('Raw query must include the primary key')
-            model_cls = deferred_class_factory(self.model, skip)
-        else:
-            model_cls = self.model
-            # All model's fields are present in the query. So, it is possible
-            # to use *args based model instantation. For each field of the model,
-            # record the query column position matching that field.
-            model_init_field_pos = []
+            # Find out which model's fields are not present in the query.
+            skip = set()
             for field in self.model._meta.fields:
-                model_init_field_pos.append(model_init_field_names[field.attname])
-        if need_resolv_columns:
-            fields = [self.model_fields.get(c, None) for c in self.columns]
-        # Begin looping through the query values.
-        for values in query:
-            if need_resolv_columns:
-                values = compiler.resolve_columns(values, fields)
-            # Associate fields to values
+                if field.attname not in model_init_field_names:
+                    skip.add(field.attname)
             if skip:
-                model_init_kwargs = {}
-                for attname, pos in six.iteritems(model_init_field_names):
-                    model_init_kwargs[attname] = values[pos]
-                instance = model_cls(**model_init_kwargs)
+                if self.model._meta.pk.attname in skip:
+                    raise InvalidQuery('Raw query must include the primary key')
+                model_cls = deferred_class_factory(self.model, skip)
             else:
-                model_init_args = [values[pos] for pos in model_init_field_pos]
-                instance = model_cls(*model_init_args)
-            if annotation_fields:
-                for column, pos in annotation_fields:
-                    setattr(instance, column, values[pos])
+                model_cls = self.model
+                # All model's fields are present in the query. So, it is possible
+                # to use *args based model instantation. For each field of the model,
+                # record the query column position matching that field.
+                model_init_field_pos = []
+                for field in self.model._meta.fields:
+                    model_init_field_pos.append(model_init_field_names[field.attname])
+            if need_resolv_columns:
+                fields = [self.model_fields.get(c, None) for c in self.columns]
+            # Begin looping through the query values.
+            for values in query:
+                if need_resolv_columns:
+                    values = compiler.resolve_columns(values, fields)
+                # Associate fields to values
+                if skip:
+                    model_init_kwargs = {}
+                    for attname, pos in six.iteritems(model_init_field_names):
+                        model_init_kwargs[attname] = values[pos]
+                    instance = model_cls(**model_init_kwargs)
+                else:
+                    model_init_args = [values[pos] for pos in model_init_field_pos]
+                    instance = model_cls(*model_init_args)
+                if annotation_fields:
+                    for column, pos in annotation_fields:
+                        setattr(instance, column, values[pos])
 
-            instance._state.db = db
-            instance._state.adding = False
+                instance._state.db = db
+                instance._state.adding = False
 
-            yield instance
+                yield instance
+        finally:
+            # Done iterating the Query. If it has its own cursor, close it.
+            if hasattr(self.query, 'cursor') and self.query.cursor:
+                self.query.cursor.close()
 
     def __repr__(self):
         text = self.raw_query

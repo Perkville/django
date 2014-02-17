@@ -1,9 +1,11 @@
 from copy import copy
+from itertools import repeat
 import inspect
 
 from django.conf import settings
 from django.utils import timezone
 from django.utils.functional import cached_property
+from django.utils.six.moves import xrange
 
 
 class RegisterLookupMixin(object):
@@ -77,8 +79,8 @@ class Lookup(RegisterLookupMixin):
         lhs = lhs or self.lhs
         return qn.compile(lhs)
 
-    def process_rhs(self, qn, connection, rhs=None):
-        value = rhs or self.rhs
+    def process_rhs(self, qn, connection):
+        value = self.rhs
         # Due to historical reasons there are a couple of different
         # ways to produce sql here. get_compiler is likely a Query
         # instance, _as_sql QuerySet and as_sql just something with
@@ -94,6 +96,12 @@ class Lookup(RegisterLookupMixin):
             return '(' + sql + ')', params
         else:
             return self.get_db_prep_lookup(value, connection)
+
+    def rhs_is_direct_value(self):
+        return not(
+            hasattr(self.rhs, 'as_sql') or
+            hasattr(self.rhs, '_as_sql') or
+            hasattr(self.rhs, 'get_compiler'))
 
     def relabeled_clone(self, relabels):
         new = copy(self)
@@ -113,16 +121,22 @@ class Lookup(RegisterLookupMixin):
 
 
 class BuiltinLookup(Lookup):
+    def process_lhs(self, qn, connection, lhs=None):
+        lhs_sql, params = super(BuiltinLookup, self).process_lhs(
+            qn, connection, lhs)
+        field_internal_type = self.lhs.output_type.get_internal_type()
+        db_type = self.lhs.output_type.db_type(connection=connection)
+        lhs_sql = connection.ops.field_cast_sql(
+            db_type, field_internal_type) % lhs_sql
+        lhs_sql = connection.ops.lookup_cast(self.lookup_name) % lhs_sql
+        return lhs_sql, params
+
     def as_sql(self, qn, connection):
         lhs_sql, params = self.process_lhs(qn, connection)
-        field_internal_type = self.lhs.output_type.get_internal_type()
-        db_type = self.lhs.output_type
-        lhs_sql = connection.ops.field_cast_sql(db_type, field_internal_type) % lhs_sql
-        lhs_sql = connection.ops.lookup_cast(self.lookup_name) % lhs_sql
         rhs_sql, rhs_params = self.process_rhs(qn, connection)
         params.extend(rhs_params)
-        operator_plus_rhs = self.get_rhs_op(connection, rhs_sql)
-        return '%s %s' % (lhs_sql, operator_plus_rhs), params
+        rhs_sql = self.get_rhs_op(connection, rhs_sql)
+        return '%s %s' % (lhs_sql, rhs_sql), params
 
     def get_rhs_op(self, connection, rhs):
         return connection.operators[self.lookup_name] % rhs
@@ -186,6 +200,31 @@ class In(BuiltinLookup):
 
     def get_rhs_op(self, connection, rhs):
         return 'IN %s' % rhs
+
+    def as_sql(self, qn, connection):
+        max_in_list_size = connection.ops.max_in_list_size()
+        if self.rhs_is_direct_value() and (max_in_list_size and
+                                           len(self.rhs) > max_in_list_size):
+            rhs, rhs_params = self.process_rhs(qn, connection)
+            lhs, lhs_params = self.process_lhs(qn, connection)
+            in_clause_elements = ['(']
+            params = []
+            for offset in xrange(0, len(rhs_params), max_in_list_size):
+                if offset > 0:
+                    in_clause_elements.append(' OR ')
+                in_clause_elements.append('%s IN (' % lhs)
+                params.extend(lhs_params)
+                group_size = min(len(rhs_params) - offset, max_in_list_size)
+                param_group = ', '.join(repeat('%s', group_size))
+                in_clause_elements.append(param_group)
+                in_clause_elements.append(')')
+                params.extend(rhs_params[offset: offset + max_in_list_size])
+            in_clause_elements.append(')')
+            return ''.join(in_clause_elements), params
+        else:
+            return super(In, self).as_sql(qn, connection)
+
+
 default_lookups['in'] = In
 
 
@@ -243,12 +282,15 @@ default_lookups['range'] = Range
 
 
 class DateLookup(BuiltinLookup):
-
-    def process_lhs(self, qn, connection):
-        lhs, params = super(DateLookup, self).process_lhs(qn, connection)
-        tzname = timezone.get_current_timezone_name() if settings.USE_TZ else None
-        sql, tz_params = connection.ops.datetime_extract_sql(self.extract_type, lhs, tzname)
-        return connection.ops.lookup_cast(self.lookup_name) % sql, tz_params
+    def process_lhs(self, qn, connection, lhs=None):
+        from django.db.models import DateTimeField
+        lhs, params = super(DateLookup, self).process_lhs(qn, connection, lhs)
+        if isinstance(self.lhs.output_type, DateTimeField):
+            tzname = timezone.get_current_timezone_name() if settings.USE_TZ else None
+            sql, tz_params = connection.ops.datetime_extract_sql(self.extract_type, lhs, tzname)
+            return connection.ops.lookup_cast(self.lookup_name) % sql, tz_params
+        else:
+            return connection.ops.date_extract_sql(self.lookup_name, lhs), []
 
     def get_rhs_op(self, connection, rhs):
         return '= %s' % rhs
@@ -309,9 +351,18 @@ default_lookups['search'] = Search
 
 class Regex(BuiltinLookup):
     lookup_name = 'regex'
+
+    def as_sql(self, qn, connection):
+        if self.lookup_name in connection.operators:
+            return super(Regex, self).as_sql(qn, connection)
+        else:
+            lhs, lhs_params = self.process_lhs(qn, connection)
+            rhs, rhs_params = self.process_rhs(qn, connection)
+            sql_template = connection.ops.regex_lookup(self.lookup_name)
+            return sql_template % (lhs, rhs), lhs_params + rhs_params
 default_lookups['regex'] = Regex
 
 
-class IRegex(BuiltinLookup):
+class IRegex(Regex):
     lookup_name = 'iregex'
 default_lookups['iregex'] = IRegex
