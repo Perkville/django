@@ -1652,7 +1652,7 @@ class ModelAdmin(BaseModelAdmin):
         context = dict(
             self.admin_site.each_context(request),
             module_name=force_text(opts.verbose_name_plural),
-            selection_note=_('0 of %(cnt)s selected') % {'cnt': len(cl.result_list)},
+            selection_note="",
             selection_note_all=selection_note_all % {'total_count': cl.result_count},
             title=cl.title,
             is_popup=cl.is_popup,
