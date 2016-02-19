@@ -159,3 +159,65 @@ class Page(collections.Sequence):
         if self.number == self.paginator.num_pages:
             return self.paginator.count
         return self.number * self.paginator.per_page
+
+
+class CountlessPaginator(Paginator):
+    """
+    A Paginator that doesn't call COUNT()
+    """
+    _count = None
+    count = None
+    num_pages = None
+
+    def validate_number(self, number):
+        """Validates the given 1-based page number."""
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            raise PageNotAnInteger('That page number is not an integer')
+        if number < 1:
+            raise EmptyPage('That page number is less than 1')
+        return number
+
+    def page(self, number):
+        """Returns a Page object for the given 1-based page number."""
+        number = self.validate_number(number)
+        bottom = (number - 1) * self.per_page
+        top = bottom + self.per_page
+        object_list = self.object_list[bottom:top]
+        return CountlessPage(object_list, number, self)
+
+
+class CountlessPage(Page):
+    """
+    A Page which doesn't rely on Paginator having a count
+    """
+    def has_one_or_more_pages(self):
+        """If the original object list is empty, then this page has no records"""
+        return self.paginator.object_list.exists()
+
+    def has_next(self):
+        if len(self) < self.paginator.per_page:
+            return False
+        else:
+            return True
+
+    def start_index(self):
+        """
+        Returns the 1-based index of the first object on this page,
+        relative to total objects in the paginator.
+        """
+        # Special case, return zero if no items.
+        if len(self) == 0:
+            return 0
+        return (self.paginator.per_page * (self.number - 1)) + 1
+
+    def end_index(self):
+        """
+        Returns the 1-based index of the last object on this page,
+        relative to total objects found (hits).
+        """
+        # Special case for the last page because there can be orphans.
+        if not self.has_next():
+            return len(self)
+        return self.number * self.paginator.per_page

@@ -39,7 +39,7 @@ def paginator_number(cl, i):
     else:
         return format_html('<a href="{}"{}>{}</a> ',
                            cl.get_query_string({PAGE_VAR: i}),
-                           mark_safe(' class="end"' if i == cl.paginator.num_pages - 1 else ''),
+                           mark_safe(' class="end"' if cl.paginator.num_pages is not None and i == cl.paginator.num_pages - 1 else ''),
                            i + 1)
 
 
@@ -57,9 +57,19 @@ def pagination(cl):
         ON_EACH_SIDE = 3
         ON_ENDS = 2
 
-        # If there are 10 or fewer pages, display links to every page.
-        # Otherwise, do some fancy
-        if paginator.num_pages <= 10:
+        if paginator.num_pages is None:
+            # If the paginator has no total number of pages, display ranges
+            # for the last few pages and the next page
+            lowerbound = page_num - 3
+            if lowerbound < 0:
+                lowerbound = 0
+            upperbound = page_num
+            if cl.page is not None and cl.page.has_next():
+                upperbound += 1
+            page_range = range(lowerbound, upperbound + 1)
+        elif paginator.num_pages <= 10:
+            # If there are 10 or fewer pages, display links to every page.
+            # Otherwise, do some fancy
             page_range = range(paginator.num_pages)
         else:
             # Insert "smart" pagination links, so that there are always ON_ENDS

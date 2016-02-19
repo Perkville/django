@@ -187,18 +187,26 @@ class ChangeList(object):
                 full_result_count = result_count
         else:
             full_result_count = None
-        can_show_all = result_count <= self.list_max_show_all
-        multi_page = result_count > self.list_per_page
+
+        if result_count is not None:
+            can_show_all = result_count <= self.list_max_show_all
+            multi_page = result_count > self.list_per_page
+        else:
+            can_show_all = False
+            multi_page = True
 
         # Get the list of objects to display on this page.
+        page = None
         if (self.show_all and can_show_all) or not multi_page:
             result_list = self.queryset._clone()
         else:
             try:
-                result_list = paginator.page(self.page_num + 1).object_list
+                page = paginator.page(self.page_num + 1)
             except InvalidPage:
                 raise IncorrectLookupParameters
 
+        result_list = page.object_list
+        self.page = page
         self.result_count = result_count
         self.show_full_result_count = self.model_admin.show_full_result_count
         # Admin actions are shown if there is at least one entry

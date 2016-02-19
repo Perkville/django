@@ -24,7 +24,7 @@ from django.core.exceptions import (
     FieldDoesNotExist, FieldError, ImproperlyConfigured, PermissionDenied,
     ValidationError,
 )
-from django.core.paginator import Paginator
+from django.core.paginator import CountlessPaginator
 from django.core.urlresolvers import reverse
 from django.db import models, router, transaction
 from django.db.models.constants import LOOKUP_SEP
@@ -111,7 +111,7 @@ class BaseModelAdmin(six.with_metaclass(forms.MediaDefiningClass)):
     readonly_fields = ()
     ordering = None
     view_on_site = True
-    show_full_result_count = True
+    show_full_result_count = False
 
     # Validation of ModelAdmin definitions
     # Old, deprecated style:
@@ -559,7 +559,7 @@ class ModelAdmin(BaseModelAdmin):
     date_hierarchy = None
     save_as = False
     save_on_top = False
-    paginator = Paginator
+    paginator = CountlessPaginator
     preserve_filters = True
     inlines = []
 
@@ -1652,7 +1652,7 @@ class ModelAdmin(BaseModelAdmin):
         context = dict(
             self.admin_site.each_context(request),
             module_name=force_text(opts.verbose_name_plural),
-            selection_note="",
+            selection_note=_('0 of %(cnt)s selected') % {'cnt': len(cl.result_list)},
             selection_note_all=selection_note_all % {'total_count': cl.result_count},
             title=cl.title,
             is_popup=cl.is_popup,
