@@ -10,6 +10,7 @@ import datetime
 import re
 import sys
 import warnings
+import logging
 
 from django.conf import settings
 from django.db import utils
@@ -37,6 +38,9 @@ from .introspection import DatabaseIntrospection            # isort:skip
 from .operations import DatabaseOperations                  # isort:skip
 from .schema import DatabaseSchemaEditor                    # isort:skip
 from .validation import DatabaseValidation                  # isort:skip
+
+
+logger = logging.getLogger('django.db.backends.mysql')
 
 # We want version (1, 2, 1, 'final', 2) or later. We can't just use
 # lexicographic ordering in this check because then (1, 2, 1, 'gamma')
@@ -123,6 +127,8 @@ class CursorWrapper(object):
             # args is None means no string interpolation
             return self.cursor.execute(query, args)
         except Database.OperationalError as e:
+            # TODO: Adjust the OperationalError to capture the original failed query
+            logger.debug("FAILED MYSQL QUERY %s %s" % (query, args))
             # Map some error codes to IntegrityError, since they seem to be
             # misclassified and Django would prefer the more logical place.
             if e.args[0] in self.codes_for_integrityerror:
