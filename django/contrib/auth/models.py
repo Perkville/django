@@ -22,6 +22,9 @@ def update_last_login(sender, user, **kwargs):
     A signal receiver which updates the last_login date for
     the user logging in.
     """
+    from django.conf import settings
+    if getattr(settings, 'NO_UPDATE_LAST_LOGIN', False):
+        return
     user.last_login = timezone.now()
     user.save(update_fields=['last_login'])
 user_logged_in.connect(update_last_login)
