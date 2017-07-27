@@ -108,10 +108,11 @@ class Command(BaseCommand):
 
         self.stdout.write("Performing system checks...\n\n")
         self.validate(display_num_errors=True)
-        try:
-            self.check_migrations()
-        except ImproperlyConfigured:
-            pass
+        if not getattr(settings, 'DISABLE_MIGRATION_CHECKS', False):
+            try:
+                self.check_migrations()
+            except ImproperlyConfigured:
+                pass
         now = datetime.now().strftime('%B %d, %Y - %X')
         if six.PY2:
             now = now.decode(get_system_encoding())
