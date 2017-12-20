@@ -1,11 +1,9 @@
 from django.contrib.auth import models as auth
 from django.db import models
-from django.utils.encoding import python_2_unicode_compatible
 
 
 # No related name is needed here, since symmetrical relations are not
 # explicitly reversible.
-@python_2_unicode_compatible
 class SelfRefer(models.Model):
     name = models.CharField(max_length=10)
     references = models.ManyToManyField('self')
@@ -15,7 +13,6 @@ class SelfRefer(models.Model):
         return self.name
 
 
-@python_2_unicode_compatible
 class Tag(models.Model):
     name = models.CharField(max_length=10)
 
@@ -24,7 +21,6 @@ class Tag(models.Model):
 
 
 # Regression for #11956 -- a many to many to the base class
-@python_2_unicode_compatible
 class TagCollection(Tag):
     tags = models.ManyToManyField(Tag, related_name='tag_collections')
 
@@ -34,7 +30,6 @@ class TagCollection(Tag):
 
 # A related_name is required on one of the ManyToManyField entries here because
 # they are both addressable as reverse relations from Tag.
-@python_2_unicode_compatible
 class Entry(models.Model):
     name = models.CharField(max_length=10)
     topics = models.ManyToManyField(Tag)
@@ -57,10 +52,13 @@ class SelfReferChildSibling(SelfRefer):
 class Line(models.Model):
     name = models.CharField(max_length=100)
 
+    def __str__(self):
+        return self.name
+
 
 class Worksheet(models.Model):
     id = models.CharField(primary_key=True, max_length=100)
-    lines = models.ManyToManyField(Line, blank=True, null=True)
+    lines = models.ManyToManyField(Line, blank=True)
 
 
 # Regression for #11226 -- A model with the same name that another one to
@@ -87,3 +85,10 @@ class RegressionModelSplit(BadModelWithSplit):
     Model with a split method should not cause an error in add_lazy_relation
     """
     others = models.ManyToManyField('self')
+
+
+# Regression for #24505 -- Two ManyToManyFields with the same "to" model
+# and related_name set to '+'.
+class Post(models.Model):
+    primary_lines = models.ManyToManyField(Line, related_name='+')
+    secondary_lines = models.ManyToManyField(Line, related_name='+')

@@ -1,24 +1,20 @@
-from __future__ import unicode_literals
-
 import datetime
 import decimal
-import os
+import logging
 import sys
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
-from django.core.urlresolvers import get_resolver
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import render_to_response, render
-from django.template import Context, RequestContext, TemplateDoesNotExist
-from django.views.debug import technical_500_response, SafeExceptionReporterFilter
-from django.views.decorators.debug import (sensitive_post_parameters,
-                                           sensitive_variables)
-from django.utils._os import upath
-from django.utils.log import getLogger
-
-from . import BrokenException, except_args
-
-dirs = (os.path.join(os.path.dirname(upath(__file__)), 'other_templates'),)
+from django.http import Http404, HttpResponse, JsonResponse
+from django.shortcuts import render
+from django.template import TemplateDoesNotExist
+from django.urls import get_resolver
+from django.views import View
+from django.views.debug import (
+    SafeExceptionReporterFilter, technical_500_response,
+)
+from django.views.decorators.debug import (
+    sensitive_post_parameters, sensitive_variables,
+)
 
 
 def index_page(request):
@@ -26,10 +22,13 @@ def index_page(request):
     return HttpResponse('<html><body>Dummy page</body></html>')
 
 
+def with_parameter(request, parameter):
+    return HttpResponse('ok')
+
+
 def raises(request):
     # Make sure that a callable that raises an exception in the stack frame's
-    # local vars won't hijack the technical 500 response. See:
-    # http://code.djangoproject.com/ticket/15025
+    # local vars won't hijack the technical 500 response (#15025).
     def callable():
         raise Exception
     try:
@@ -52,7 +51,7 @@ def raises400(request):
 
 
 def raises403(request):
-    raise PermissionDenied
+    raise PermissionDenied("Insufficient Permissions")
 
 
 def raises404(request):
@@ -60,106 +59,32 @@ def raises404(request):
     resolver.resolve('/not-in-urls')
 
 
-def redirect(request):
-    """
-    Forces an HTTP redirect.
-    """
-    return HttpResponseRedirect("target/")
+def technical404(request):
+    raise Http404("Testing technical 404.")
 
 
-def view_exception(request, n):
-    raise BrokenException(except_args[int(n)])
+class Http404View(View):
+    def get(self, request):
+        raise Http404("Testing class-based technical 404.")
 
 
-def template_exception(request, n):
-    return render_to_response('debug/template_exception.html',
-        {'arg': except_args[int(n)]})
+def template_exception(request):
+    return render(request, 'debug/template_exception.html')
 
 
 def jsi18n(request):
-    return render_to_response('jsi18n.html')
-
-# Some views to exercise the shortcuts
+    return render(request, 'jsi18n.html')
 
 
-def render_to_response_view(request):
-    return render_to_response('debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    })
-
-
-def render_to_response_view_with_request_context(request):
-    return render_to_response('debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    }, context_instance=RequestContext(request))
-
-
-def render_to_response_view_with_content_type(request):
-    return render_to_response('debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    }, content_type='application/x-rendertest')
-
-
-def render_to_response_view_with_dirs(request):
-    return render_to_response('render_dirs_test.html', dirs=dirs)
-
-
-def render_view(request):
-    return render(request, 'debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    })
-
-
-def render_view_with_base_context(request):
-    return render(request, 'debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    }, context_instance=Context())
-
-
-def render_view_with_content_type(request):
-    return render(request, 'debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    }, content_type='application/x-rendertest')
-
-
-def render_view_with_status(request):
-    return render(request, 'debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    }, status=403)
-
-
-def render_view_with_current_app(request):
-    return render(request, 'debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    }, current_app="foobar_app")
-
-
-def render_view_with_current_app_conflict(request):
-    # This should fail because we don't passing both a current_app and
-    # context_instance:
-    return render(request, 'debug/render_test.html', {
-        'foo': 'FOO',
-        'bar': 'BAR',
-    }, current_app="foobar_app", context_instance=RequestContext(request))
-
-
-def render_with_dirs(request):
-    return render(request, 'render_dirs_test.html', dirs=dirs)
+def jsi18n_multi_catalogs(request):
+    return render(request, 'jsi18n-multi-catalogs.html')
 
 
 def raises_template_does_not_exist(request, path='i_dont_exist.html'):
     # We need to inspect the HTML generated by the fancy 500 debug view but
     # the test client ignores it, so we send it explicitly.
     try:
-        return render_to_response(path)
+        return render(request, path)
     except TemplateDoesNotExist:
         return technical_500_response(request, *sys.exc_info())
 
@@ -171,7 +96,7 @@ def render_no_template(request):
 
 
 def send_log(request, exc_info):
-    logger = getLogger('django.request')
+    logger = logging.getLogger('django')
     # The default logging config has a logging filter to ensure admin emails are
     # only sent with DEBUG=False, but since someone might choose to remove that
     # filter, we still want to be able to test the behavior of error emails
@@ -183,12 +108,10 @@ def send_log(request, exc_info):
     orig_filters = admin_email_handler.filters
     admin_email_handler.filters = []
     admin_email_handler.include_html = True
-    logger.error('Internal Server Error: %s', request.path,
+    logger.error(
+        'Internal Server Error: %s', request.path,
         exc_info=exc_info,
-        extra={
-            'status_code': 500,
-            'request': request
-        }
+        extra={'status_code': 500, 'request': request},
     )
     admin_email_handler.filters = orig_filters
 
@@ -304,7 +227,7 @@ def custom_exception_reporter_filter_view(request):
         return technical_500_response(request, *exc_info)
 
 
-class Klass(object):
+class Klass:
 
     @sensitive_variables('sauce')
     def method(self, request):

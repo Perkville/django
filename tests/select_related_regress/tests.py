@@ -1,11 +1,10 @@
-from __future__ import unicode_literals
-
 from django.test import TestCase
-from django.utils import six
 
-from .models import (Building, Child, Device, Port, Item, Country, Connection,
-    ClientStatus, State, Client, SpecialClient, TUser, Person, Student,
-    Organizer, Class, Enrollment, Hen, Chick, A, B, C)
+from .models import (
+    A, B, Building, C, Chick, Child, Class, Client, ClientStatus, Connection,
+    Country, Device, Enrollment, Hen, Item, Organizer, Person, Port,
+    SpecialClient, State, Student, TUser,
+)
 
 
 class SelectRelatedRegressTests(TestCase):
@@ -34,12 +33,21 @@ class SelectRelatedRegressTests(TestCase):
         c2 = Connection.objects.create(start=port2, end=port3)
 
         connections = Connection.objects.filter(start__device__building=b, end__device__building=b).order_by('id')
-        self.assertEqual([(c.id, six.text_type(c.start), six.text_type(c.end)) for c in connections],
-            [(c1.id, 'router/4', 'switch/7'), (c2.id, 'switch/7', 'server/1')])
+        self.assertEqual(
+            [(c.id, str(c.start), str(c.end)) for c in connections],
+            [(c1.id, 'router/4', 'switch/7'), (c2.id, 'switch/7', 'server/1')]
+        )
 
-        connections = Connection.objects.filter(start__device__building=b, end__device__building=b).select_related().order_by('id')
-        self.assertEqual([(c.id, six.text_type(c.start), six.text_type(c.end)) for c in connections],
-            [(c1.id, 'router/4', 'switch/7'), (c2.id, 'switch/7', 'server/1')])
+        connections = (
+            Connection.objects
+            .filter(start__device__building=b, end__device__building=b)
+            .select_related()
+            .order_by('id')
+        )
+        self.assertEqual(
+            [(c.id, str(c.start), str(c.end)) for c in connections],
+            [(c1.id, 'router/4', 'switch/7'), (c2.id, 'switch/7', 'server/1')]
+        )
 
         # This final query should only have seven tables (port, device and building
         # twice each, plus connection once). Thus, 6 joins plus the FROM table.
@@ -152,7 +160,7 @@ class SelectRelatedRegressTests(TestCase):
             self.assertEqual(qs[0].state, wa)
             # The select_related join wasn't promoted as there was already an
             # existing (even if trimmed) inner join to state.
-            self.assertFalse('LEFT OUTER' in str(qs.query))
+            self.assertNotIn('LEFT OUTER', str(qs.query))
         qs = Client.objects.select_related('state').order_by('name')
         with self.assertNumQueries(1):
             self.assertEqual(list(qs), [bob, jack])
@@ -160,27 +168,23 @@ class SelectRelatedRegressTests(TestCase):
             self.assertEqual(qs[1].state, wa)
             # The select_related join was promoted as there is already an
             # existing join.
-            self.assertTrue('LEFT OUTER' in str(qs.query))
+            self.assertIn('LEFT OUTER', str(qs.query))
 
     def test_regression_19870(self):
-        """
-        Regression for #19870
-
-        """
         hen = Hen.objects.create(name='Hen')
         Chick.objects.create(name='Chick', mother=hen)
 
         self.assertEqual(Chick.objects.all()[0].mother.name, 'Hen')
         self.assertEqual(Chick.objects.select_related()[0].mother.name, 'Hen')
 
-    def test_ticket_10733(self):
+    def test_regression_10733(self):
         a = A.objects.create(name='a', lots_of_text='lots_of_text_a', a_field='a_field')
         b = B.objects.create(name='b', lots_of_text='lots_of_text_b', b_field='b_field')
         c = C.objects.create(name='c', lots_of_text='lots_of_text_c', is_published=True,
                              c_a=a, c_b=b)
         results = C.objects.all().only('name', 'lots_of_text', 'c_a', 'c_b', 'c_b__lots_of_text',
                                        'c_a__name', 'c_b__name').select_related()
-        self.assertQuerysetEqual(results, [c], lambda x: x)
+        self.assertSequenceEqual(results, [c])
         with self.assertNumQueries(0):
             qs_c = results[0]
             self.assertEqual(qs_c.name, 'c')
@@ -188,3 +192,13 @@ class SelectRelatedRegressTests(TestCase):
             self.assertEqual(qs_c.c_b.lots_of_text, 'lots_of_text_b')
             self.assertEqual(qs_c.c_a.name, 'a')
             self.assertEqual(qs_c.c_b.name, 'b')
+
+    def test_regression_22508(self):
+        building = Building.objects.create(name='101')
+        device = Device.objects.create(name="router", building=building)
+        Port.objects.create(port_number='1', device=device)
+
+        device = Device.objects.get()
+        port = device.port_set.select_related('device__building').get()
+        with self.assertNumQueries(0):
+            port.device.building

@@ -1,51 +1,47 @@
-from __future__ import unicode_literals
-
 import json
-import sys
-import warnings
+from collections import UserList
 
 from django.conf import settings
-from django.utils.html import format_html, format_html_join
-from django.utils.encoding import force_text, python_2_unicode_compatible
+from django.core.exceptions import ValidationError  # backwards compatibility
 from django.utils import timezone
-from django.utils.translation import ugettext_lazy as _
-from django.utils import six
+from django.utils.html import escape, format_html, format_html_join, html_safe
+from django.utils.translation import gettext_lazy as _
 
-# Import ValidationError so that it can be imported from this
-# module to maintain backwards compatibility.
-from django.core.exceptions import ValidationError
 
-try:
-    from collections import UserList
-except ImportError:  # Python 2
-    from UserList import UserList
+def pretty_name(name):
+    """Convert 'first_name' to 'First name'."""
+    if not name:
+        return ''
+    return name.replace('_', ' ').capitalize()
 
 
 def flatatt(attrs):
     """
     Convert a dictionary of attributes to a single string.
     The returned string will contain a leading space followed by key="value",
-    XML-style pairs.  It is assumed that the keys do not need to be XML-escaped.
-    If the passed dictionary is empty, then return an empty string.
+    XML-style pairs. In the case of a boolean value, the key will appear
+    without a value. It is assumed that the keys do not need to be
+    XML-escaped. If the passed dictionary is empty, then return an empty
+    string.
 
-    The result is passed through 'mark_safe'.
+    The result is passed through 'mark_safe' (by way of 'format_html_join').
     """
-    for attr_name, value in attrs.items():
-        if type(value) is bool:
-            warnings.warn(
-                "In Django 1.8, widget attribute %(attr_name)s=%(bool_value)s "
-                "will %(action)s. To preserve current behavior, use the "
-                "string '%(bool_value)s' instead of the boolean value." % {
-                    'attr_name': attr_name,
-                    'action': "be rendered as '%s'" % attr_name if value else "not be rendered",
-                    'bool_value': value,
-                },
-                DeprecationWarning
-            )
-    return format_html_join('', ' {0}="{1}"', sorted(attrs.items()))
+    key_value_attrs = []
+    boolean_attrs = []
+    for attr, value in attrs.items():
+        if isinstance(value, bool):
+            if value:
+                boolean_attrs.append((attr,))
+        elif value is not None:
+            key_value_attrs.append((attr, value))
+
+    return (
+        format_html_join('', ' {}="{}"', sorted(key_value_attrs)) +
+        format_html_join('', ' {}', sorted(boolean_attrs))
+    )
 
 
-@python_2_unicode_compatible
+@html_safe
 class ErrorDict(dict):
     """
     A collection of errors that knows how to display itself in various formats.
@@ -55,16 +51,18 @@ class ErrorDict(dict):
     def as_data(self):
         return {f: e.as_data() for f, e in self.items()}
 
-    def as_json(self):
-        errors = {f: json.loads(e.as_json()) for f, e in self.items()}
-        return json.dumps(errors)
+    def get_json_data(self, escape_html=False):
+        return {f: e.get_json_data(escape_html) for f, e in self.items()}
+
+    def as_json(self, escape_html=False):
+        return json.dumps(self.get_json_data(escape_html))
 
     def as_ul(self):
         if not self:
             return ''
         return format_html(
-            '<ul class="errorlist">{0}</ul>',
-            format_html_join('', '<li>{0}{1}</li>', ((k, force_text(v)) for k, v in self.items()))
+            '<ul class="errorlist">{}</ul>',
+            format_html_join('', '<li>{}{}</li>', self.items())
         )
 
     def as_text(self):
@@ -78,29 +76,43 @@ class ErrorDict(dict):
         return self.as_ul()
 
 
-@python_2_unicode_compatible
+@html_safe
 class ErrorList(UserList, list):
     """
     A collection of errors that knows how to display itself in various formats.
     """
-    def as_data(self):
-        return self.data
+    def __init__(self, initlist=None, error_class=None):
+        super().__init__(initlist)
 
-    def as_json(self):
+        if error_class is None:
+            self.error_class = 'errorlist'
+        else:
+            self.error_class = 'errorlist {}'.format(error_class)
+
+    def as_data(self):
+        return ValidationError(self.data).error_list
+
+    def get_json_data(self, escape_html=False):
         errors = []
-        for error in ValidationError(self.data).error_list:
+        for error in self.as_data():
+            message = next(iter(error))
             errors.append({
-                'message': list(error)[0],
+                'message': escape(message) if escape_html else message,
                 'code': error.code or '',
             })
-        return json.dumps(errors)
+        return errors
+
+    def as_json(self, escape_html=False):
+        return json.dumps(self.get_json_data(escape_html))
 
     def as_ul(self):
         if not self.data:
             return ''
+
         return format_html(
-            '<ul class="errorlist">{0}</ul>',
-            format_html_join('', '<li>{0}</li>', ((force_text(e),) for e in self))
+            '<ul class="{}">{}</ul>',
+            self.error_class,
+            format_html_join('', '<li>{}</li>', ((e,) for e in self))
         )
 
     def as_text(self):
@@ -118,14 +130,20 @@ class ErrorList(UserList, list):
     def __eq__(self, other):
         return list(self) == other
 
-    def __ne__(self, other):
-        return list(self) != other
-
     def __getitem__(self, i):
         error = self.data[i]
         if isinstance(error, ValidationError):
-            return list(error)[0]
-        return force_text(error)
+            return next(iter(error))
+        return error
+
+    def __reduce_ex__(self, *args, **kwargs):
+        # The `list` reduce function returns an iterator as the fourth element
+        # that is normally used for repopulating. Since we only inherit from
+        # `list` for `isinstance` backward compatibility (Refs #17413) we
+        # nullify this iterator as it would otherwise result in duplicate
+        # entries. (Refs #23594)
+        info = super(UserList, self).__reduce_ex__(*args, **kwargs)
+        return info[:3] + (None, None)
 
 
 # Utilities for time zone support in DateTimeField et al.
@@ -139,25 +157,21 @@ def from_current_timezone(value):
         current_timezone = timezone.get_current_timezone()
         try:
             return timezone.make_aware(value, current_timezone)
-        except Exception:
-            message = _(
-                '%(datetime)s couldn\'t be interpreted '
-                'in time zone %(current_timezone)s; it '
-                'may be ambiguous or it may not exist.'
-            )
-            params = {'datetime': value, 'current_timezone': current_timezone}
-            six.reraise(ValidationError, ValidationError(
-                message,
+        except Exception as exc:
+            raise ValidationError(
+                _('%(datetime)s couldn\'t be interpreted '
+                  'in time zone %(current_timezone)s; it '
+                  'may be ambiguous or it may not exist.'),
                 code='ambiguous_timezone',
-                params=params,
-            ), sys.exc_info()[2])
+                params={'datetime': value, 'current_timezone': current_timezone}
+            ) from exc
     return value
 
 
 def to_current_timezone(value):
     """
     When time zone support is enabled, convert aware datetimes
-    to naive dateimes in the current time zone for display.
+    to naive datetimes in the current time zone for display.
     """
     if settings.USE_TZ and value is not None and timezone.is_aware(value):
         current_timezone = timezone.get_current_timezone()

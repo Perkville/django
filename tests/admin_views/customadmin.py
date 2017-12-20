@@ -1,15 +1,13 @@
 """
 A second, custom AdminSite -- see tests.CustomAdminSiteTests.
 """
-from __future__ import unicode_literals
-
-from django.conf.urls import patterns
+from django.conf.urls import url
 from django.contrib import admin
-from django.http import HttpResponse
-from django.contrib.auth.models import User
 from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.models import User
+from django.http import HttpResponse
 
-from . import models, forms, admin as base_admin
+from . import admin as base_admin, forms, models
 
 
 class Admin2(admin.AdminSite):
@@ -23,21 +21,24 @@ class Admin2(admin.AdminSite):
 
     # A custom index view.
     def index(self, request, extra_context=None):
-        return super(Admin2, self).index(request, {'foo': '*bar*'})
+        return super().index(request, {'foo': '*bar*'})
 
     def get_urls(self):
-        return patterns('',
-            (r'^my_view/$', self.admin_view(self.my_view)),
-        ) + super(Admin2, self).get_urls()
+        return [
+            url(r'^my_view/$', self.admin_view(self.my_view), name='my_view'),
+        ] + super().get_urls()
 
     def my_view(self, request):
         return HttpResponse("Django is a magical pony!")
+
+    def password_change(self, request, extra_context=None):
+        return super().password_change(request, {'spam': 'eggs'})
 
 
 class UserLimitedAdmin(UserAdmin):
     # used for testing password change on a user not in queryset
     def get_queryset(self, request):
-        qs = super(UserLimitedAdmin, self).get_queryset(request)
+        qs = super().get_queryset(request)
         return qs.filter(is_superuser=False)
 
 
@@ -48,7 +49,7 @@ class CustomPwdTemplateUserAdmin(UserAdmin):
 site = Admin2(name="admin2")
 
 site.register(models.Article, base_admin.ArticleAdmin)
-site.register(models.Section, inlines=[base_admin.ArticleInline])
+site.register(models.Section, inlines=[base_admin.ArticleInline], search_fields=['name'])
 site.register(models.Thing, base_admin.ThingAdmin)
 site.register(models.Fabric, base_admin.FabricAdmin)
 site.register(models.ChapterXtra1, base_admin.ChapterXtra1Admin)

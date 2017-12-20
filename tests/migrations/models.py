@@ -1,12 +1,15 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 from django.apps.registry import Apps
 from django.db import models
-from django.utils.encoding import python_2_unicode_compatible
 
 
-@python_2_unicode_compatible
+class CustomModelBase(models.base.ModelBase):
+    pass
+
+
+class ModelWithCustomBase(models.Model, metaclass=CustomModelBase):
+    pass
+
+
 class UnicodeModel(models.Model):
     title = models.CharField('ÚÑÍ¢ÓÐÉ', max_length=20, default='“Ðjáñgó”')
 
@@ -20,7 +23,7 @@ class UnicodeModel(models.Model):
         return self.title
 
 
-class Unserializable(object):
+class Unserializable:
     """
     An object that migration doesn't know how to serialize.
     """
@@ -33,3 +36,33 @@ class UnserializableModel(models.Model):
     class Meta:
         # Disable auto loading of this model as we load it on our own
         apps = Apps()
+
+
+class UnmigratedModel(models.Model):
+    """
+    A model that is in a migration-less app (which this app is
+    if its migrations directory has not been repointed)
+    """
+    pass
+
+
+class EmptyManager(models.Manager):
+    use_in_migrations = True
+
+
+class FoodQuerySet(models.query.QuerySet):
+    pass
+
+
+class BaseFoodManager(models.Manager):
+    def __init__(self, a, b, c=1, d=2):
+        super().__init__()
+        self.args = (a, b, c, d)
+
+
+class FoodManager(BaseFoodManager.from_queryset(FoodQuerySet)):
+    use_in_migrations = True
+
+
+class NoMigrationFoodManager(BaseFoodManager.from_queryset(FoodQuerySet)):
+    pass

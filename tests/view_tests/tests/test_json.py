@@ -1,13 +1,10 @@
-# encoding: utf8
-from __future__ import unicode_literals
-
 import json
 
-from django.test import TestCase
+from django.test import SimpleTestCase, override_settings
 
 
-class JsonResponseTests(TestCase):
-    urls = 'view_tests.generic_urls'
+@override_settings(ROOT_URLCONF='view_tests.generic_urls')
+class JsonResponseTests(SimpleTestCase):
 
     def test_json_response(self):
         response = self.client.get('/json/response/')

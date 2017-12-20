@@ -3,7 +3,7 @@
 import re
 
 
-class Tok(object):
+class Tok:
     """
     A specification for a token class.
     """
@@ -23,12 +23,11 @@ def literals(choices, prefix="", suffix=""):
 
     If provided, `prefix` and `suffix` will be attached to each choice
     individually.
-
     """
     return "|".join(prefix + re.escape(c) + suffix for c in choices.split())
 
 
-class Lexer(object):
+class Lexer:
     """
     A generic multi-state regex-based lexer.
     """
@@ -51,7 +50,7 @@ class Lexer(object):
         """
         Lexically analyze `text`.
 
-        Yields pairs (`name`, `tokentext`).
+        Yield pairs (`name`, `tokentext`).
         """
         end = len(text)
         state = self.state
@@ -82,7 +81,7 @@ class JsLexer(Lexer):
     >>> list(lexer.lex("a = 1"))
     [('id', 'a'), ('ws', ' '), ('punct', '='), ('ws', ' '), ('dnum', '1')]
 
-    This doesn't properly handle non-Ascii characters in the Javascript source.
+    This doesn't properly handle non-ASCII characters in the Javascript source.
     """
 
     # Because these tokens are matched as alternatives in a regex, longer
@@ -180,7 +179,7 @@ class JsLexer(Lexer):
     }
 
     def __init__(self):
-        super(JsLexer, self).__init__(self.states, 'reg')
+        super().__init__(self.states, 'reg')
 
 
 def prepare_js_for_gettext(js):

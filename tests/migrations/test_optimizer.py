@@ -1,65 +1,43 @@
-# encoding: utf8
-
-from django.test import TestCase
+from django.db import migrations, models
+from django.db.migrations import operations
 from django.db.migrations.optimizer import MigrationOptimizer
-from django.db import migrations
-from django.db import models
+from django.test import SimpleTestCase
+
+from .models import EmptyManager, UnicodeModel
 
 
-class OptimizerTests(TestCase):
+class OptimizerTests(SimpleTestCase):
     """
     Tests the migration autodetector.
     """
 
-    def optimize(self, operations):
+    def optimize(self, operations, app_label):
         """
         Handy shortcut for getting results + number of loops
         """
         optimizer = MigrationOptimizer()
-        return optimizer.optimize(operations), optimizer._iterations
+        return optimizer.optimize(operations, app_label), optimizer._iterations
 
-    def assertOptimizesTo(self, operations, expected, exact=None, less_than=None):
-        result, iterations = self.optimize(operations)
+    def assertOptimizesTo(self, operations, expected, exact=None, less_than=None, app_label=None):
+        result, iterations = self.optimize(operations, app_label)
+        result = [repr(f.deconstruct()) for f in result]
+        expected = [repr(f.deconstruct()) for f in expected]
         self.assertEqual(expected, result)
         if exact is not None and iterations != exact:
-            raise self.failureException("Optimization did not take exactly %s iterations (it took %s)" % (exact, iterations))
+            raise self.failureException(
+                "Optimization did not take exactly %s iterations (it took %s)" % (exact, iterations)
+            )
         if less_than is not None and iterations >= less_than:
-            raise self.failureException("Optimization did not take less than %s iterations (it took %s)" % (less_than, iterations))
+            raise self.failureException(
+                "Optimization did not take less than %s iterations (it took %s)" % (less_than, iterations)
+            )
 
-    def test_operation_equality(self):
-        """
-        Tests the equality operator on lists of operations.
-        If this is broken, then the optimizer will get stuck in an
-        infinite loop, so it's kind of important.
-        """
-        self.assertEqual(
-            [migrations.DeleteModel("Test")],
-            [migrations.DeleteModel("Test")],
-        )
-        self.assertEqual(
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=255))])],
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=255))])],
-        )
-        self.assertNotEqual(
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=255))])],
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=100))])],
-        )
-        self.assertEqual(
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-        )
-        self.assertNotEqual(
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-            [migrations.AddField("Test", "name", models.CharField(max_length=100))],
-        )
-        self.assertNotEqual(
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-            [migrations.AlterField("Test", "name", models.CharField(max_length=255))],
-        )
+    def assertDoesNotOptimize(self, operations, **kwargs):
+        self.assertOptimizesTo(operations, operations, **kwargs)
 
     def test_single(self):
         """
-        Tests that the optimizer does nothing on a single operation,
+        The optimizer does nothing on a single operation,
         and that it does it in just one pass.
         """
         self.assertOptimizesTo(
@@ -84,13 +62,26 @@ class OptimizerTests(TestCase):
         """
         CreateModel should absorb RenameModels.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
                 migrations.RenameModel("Foo", "Bar"),
             ],
             [
-                migrations.CreateModel("Bar", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    "Bar",
+                    [("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                )
             ],
         )
 
@@ -108,18 +99,78 @@ class OptimizerTests(TestCase):
             ],
         )
 
-    def test_create_alter_delete_model(self):
+    def test_create_alter_model_options(self):
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel('Foo', fields=[]),
+                migrations.AlterModelOptions(name='Foo', options={'verbose_name_plural': 'Foozes'}),
+            ],
+            [
+                migrations.CreateModel('Foo', fields=[], options={'verbose_name_plural': 'Foozes'}),
+            ]
+        )
+
+    def _test_create_alter_foo_delete_model(self, alter_foo):
         """
-        CreateModel, AlterModelTable, AlterUniqueTogether, and DeleteModel should collapse into nothing.
+        CreateModel, AlterModelTable, AlterUniqueTogether/AlterIndexTogether/
+        AlterOrderWithRespectTo, and DeleteModel should collapse into nothing.
         """
         self.assertOptimizesTo(
             [
                 migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
                 migrations.AlterModelTable("Foo", "woohoo"),
-                migrations.AlterUniqueTogether("Foo", [["a", "b"]]),
+                alter_foo,
                 migrations.DeleteModel("Foo"),
             ],
             [],
+        )
+
+    def test_create_alter_unique_delete_model(self):
+        self._test_create_alter_foo_delete_model(migrations.AlterUniqueTogether("Foo", [["a", "b"]]))
+
+    def test_create_alter_index_delete_model(self):
+        self._test_create_alter_foo_delete_model(migrations.AlterIndexTogether("Foo", [["a", "b"]]))
+
+    def test_create_alter_owrt_delete_model(self):
+        self._test_create_alter_foo_delete_model(migrations.AlterOrderWithRespectTo("Foo", "a"))
+
+    def _test_alter_alter_model(self, alter_foo, alter_bar):
+        """
+        Two AlterUniqueTogether/AlterIndexTogether/AlterOrderWithRespectTo
+        should collapse into the second.
+        """
+        self.assertOptimizesTo(
+            [
+                alter_foo,
+                alter_bar,
+            ],
+            [
+                alter_bar,
+            ],
+        )
+
+    def test_alter_alter_table_model(self):
+        self._test_alter_alter_model(
+            migrations.AlterModelTable("Foo", "a"),
+            migrations.AlterModelTable("Foo", "b"),
+        )
+
+    def test_alter_alter_unique_model(self):
+        self._test_alter_alter_model(
+            migrations.AlterUniqueTogether("Foo", [["a", "b"]]),
+            migrations.AlterUniqueTogether("Foo", [["a", "c"]]),
+        )
+
+    def test_alter_alter_index_model(self):
+        self._test_alter_alter_model(
+            migrations.AlterIndexTogether("Foo", [["a", "b"]]),
+            migrations.AlterIndexTogether("Foo", [["a", "c"]]),
+        )
+
+    def test_alter_alter_owrt_model(self):
+        self._test_alter_alter_model(
+            migrations.AlterOrderWithRespectTo("Foo", "a"),
+            migrations.AlterOrderWithRespectTo("Foo", "b"),
         )
 
     def test_optimize_through_create(self):
@@ -158,19 +209,46 @@ class OptimizerTests(TestCase):
             [],
         )
         # This should not work - FK should block it
-        self.assertOptimizesTo(
+        self.assertDoesNotOptimize(
             [
                 migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
-                migrations.CreateModel("Bar", [("other", models.ForeignKey("testapp.Foo"))]),
-                migrations.DeleteModel("Foo"),
-            ],
-            [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
-                migrations.CreateModel("Bar", [("other", models.ForeignKey("testapp.Foo"))]),
+                migrations.CreateModel("Bar", [("other", models.ForeignKey("testapp.Foo", models.CASCADE))]),
                 migrations.DeleteModel("Foo"),
             ],
         )
+        # The same operations should be optimized if app_label is specified and
+        # a FK references a model from the other app.
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel("Bar", [("other", models.ForeignKey("testapp.Foo", models.CASCADE))]),
+                migrations.DeleteModel("Foo"),
+            ],
+            [
+                migrations.CreateModel("Bar", [("other", models.ForeignKey("testapp.Foo", models.CASCADE))]),
+            ],
+            app_label="otherapp",
+        )
+        # But it shouldn't work if a FK references a model with the same
+        # app_label.
+        self.assertDoesNotOptimize(
+            [
+                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel("Bar", [("other", models.ForeignKey("testapp.Foo", models.CASCADE))]),
+                migrations.DeleteModel("Foo"),
+            ],
+            app_label="testapp",
+        )
         # This should not work - bases should block it
+        self.assertDoesNotOptimize(
+            [
+                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel("Bar", [("size", models.IntegerField())], bases=("testapp.Foo", )),
+                migrations.DeleteModel("Foo"),
+            ],
+        )
+        # The same operations should be optimized if app_label and none of
+        # bases belong to that app.
         self.assertOptimizesTo(
             [
                 migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
@@ -178,26 +256,77 @@ class OptimizerTests(TestCase):
                 migrations.DeleteModel("Foo"),
             ],
             [
+                migrations.CreateModel("Bar", [("size", models.IntegerField())], bases=("testapp.Foo", )),
+            ],
+            app_label="otherapp",
+        )
+        # But it shouldn't work if some of bases belongs to the specified app.
+        self.assertDoesNotOptimize(
+            [
                 migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
                 migrations.CreateModel("Bar", [("size", models.IntegerField())], bases=("testapp.Foo", )),
                 migrations.DeleteModel("Foo"),
             ],
+            app_label="testapp",
         )
 
     def test_create_model_add_field(self):
         """
         AddField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
                 migrations.AddField("Foo", "age", models.IntegerField()),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.CharField(max_length=255)),
-                    ("age", models.IntegerField()),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.CharField(max_length=255)),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
+            ],
+        )
+
+    def test_create_model_add_field_not_through_fk(self):
+        """
+        AddField should NOT optimize into CreateModel if it's an FK to a model
+        that's between them.
+        """
+        self.assertDoesNotOptimize(
+            [
+                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel("Link", [("url", models.TextField())]),
+                migrations.AddField("Foo", "link", models.ForeignKey("migrations.Link", models.CASCADE)),
+            ],
+        )
+
+    def test_create_model_add_field_not_through_m2m_through(self):
+        """
+        AddField should NOT optimize into CreateModel if it's an M2M using a
+        through that's created between them.
+        """
+        # Note: The middle model is not actually a valid through model,
+        # but that doesn't matter, as we never render it.
+        self.assertDoesNotOptimize(
+            [
+                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel("LinkThrough", []),
+                migrations.AddField(
+                    "Foo", "link", models.ManyToManyField("migrations.Link", through="migrations.LinkThrough")
+                ),
             ],
         )
 
@@ -205,15 +334,28 @@ class OptimizerTests(TestCase):
         """
         AlterField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
                 migrations.AlterField("Foo", "name", models.IntegerField()),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.IntegerField()),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.IntegerField()),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
             ],
         )
 
@@ -221,15 +363,28 @@ class OptimizerTests(TestCase):
         """
         RenameField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
                 migrations.RenameField("Foo", "name", "title"),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("title", models.CharField(max_length=255)),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("title", models.CharField(max_length=255)),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
             ],
         )
 
@@ -268,18 +423,31 @@ class OptimizerTests(TestCase):
         """
         RemoveField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.CharField(max_length=255)),
-                    ("age", models.IntegerField()),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.CharField(max_length=255)),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
                 migrations.RemoveField("Foo", "age"),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.CharField(max_length=255)),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.CharField(max_length=255)),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(UnicodeModel,),
+                    managers=managers,
+                ),
             ],
         )
 
@@ -293,7 +461,7 @@ class OptimizerTests(TestCase):
                 migrations.AlterField("Foo", "age", models.FloatField(default=2.4)),
             ],
             [
-                migrations.AddField("Foo", "age", models.FloatField(default=2.4)),
+                migrations.AddField("Foo", name="age", field=models.FloatField(default=2.4)),
             ],
         )
 
@@ -323,11 +491,160 @@ class OptimizerTests(TestCase):
             ],
         )
 
+    def _test_create_alter_foo_field(self, alter):
+        """
+        CreateModel, AlterFooTogether/AlterOrderWithRespectTo followed by an
+        add/alter/rename field should optimize to CreateModel and the Alter*
+        """
+        # AddField
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                ]),
+                alter,
+                migrations.AddField("Foo", "c", models.IntegerField()),
+            ],
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                    ("c", models.IntegerField()),
+                ]),
+                alter,
+            ],
+        )
+
+        # AlterField
+        self.assertDoesNotOptimize(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                ]),
+                alter,
+                migrations.AlterField("Foo", "b", models.CharField(max_length=255)),
+            ],
+        )
+
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                    ("c", models.IntegerField()),
+                ]),
+                alter,
+                migrations.AlterField("Foo", "c", models.CharField(max_length=255)),
+            ],
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                    ("c", models.CharField(max_length=255)),
+                ]),
+                alter,
+            ],
+        )
+
+        # RenameField
+        self.assertDoesNotOptimize(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                ]),
+                alter,
+                migrations.RenameField("Foo", "b", "c"),
+            ],
+        )
+
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                ]),
+                alter,
+                migrations.RenameField("Foo", "b", "x"),
+                migrations.RenameField("Foo", "x", "c"),
+            ],
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                ]),
+                alter,
+                migrations.RenameField("Foo", "b", "c"),
+            ],
+        )
+
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                    ("c", models.IntegerField()),
+                ]),
+                alter,
+                migrations.RenameField("Foo", "c", "d"),
+            ],
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                    ("d", models.IntegerField()),
+                ]),
+                alter,
+            ],
+        )
+
+        # RemoveField
+        self.assertDoesNotOptimize(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                ]),
+                alter,
+                migrations.RemoveField("Foo", "b"),
+            ],
+        )
+
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                    ("c", models.IntegerField()),
+                ]),
+                alter,
+                migrations.RemoveField("Foo", "c"),
+            ],
+            [
+                migrations.CreateModel("Foo", [
+                    ("a", models.IntegerField()),
+                    ("b", models.IntegerField()),
+                ]),
+                alter,
+            ],
+        )
+
+    def test_create_alter_unique_field(self):
+        self._test_create_alter_foo_field(migrations.AlterUniqueTogether("Foo", [["a", "b"]]))
+
+    def test_create_alter_index_field(self):
+        self._test_create_alter_foo_field(migrations.AlterIndexTogether("Foo", [["a", "b"]]))
+
+    def test_create_alter_owrt_field(self):
+        self._test_create_alter_foo_field(migrations.AlterOrderWithRespectTo("Foo", "b"))
+
     def test_optimize_through_fields(self):
         """
-        Checks that field-level through checking is working.
-        This should manage to collapse model Foo to nonexistence,
-        and model Bar to a single IntegerField called "width".
+        field-level through checking is working. This should manage to collapse
+        model Foo to nonexistence, and model Bar to a single IntegerField
+        called "width".
         """
         self.assertOptimizesTo(
             [
@@ -345,5 +662,24 @@ class OptimizerTests(TestCase):
             ],
             [
                 migrations.CreateModel("Bar", [("width", models.IntegerField())]),
+            ],
+        )
+
+    def test_optimize_elidable_operation(self):
+        elidable_operation = operations.base.Operation()
+        elidable_operation.elidable = True
+        self.assertOptimizesTo(
+            [
+                elidable_operation,
+                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                elidable_operation,
+                migrations.CreateModel("Bar", [("size", models.IntegerField())]),
+                elidable_operation,
+                migrations.RenameModel("Foo", "Phou"),
+                migrations.DeleteModel("Bar"),
+                elidable_operation,
+            ],
+            [
+                migrations.CreateModel("Phou", [("name", models.CharField(max_length=255))]),
             ],
         )

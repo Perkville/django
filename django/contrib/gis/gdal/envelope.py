@@ -11,14 +11,15 @@
  Lower left (min_x, min_y) o----------+
 """
 from ctypes import Structure, c_double
-from django.contrib.gis.gdal.error import OGRException
+
+from django.contrib.gis.gdal.error import GDALException
 
 
 # The OGR definition of an Envelope is a C structure containing four doubles.
 #  See the 'ogr_core.h' source file for more information:
-#   http://www.gdal.org/ogr/ogr__core_8h-source.html
+#   http://www.gdal.org/ogr__core_8h_source.html
 class OGREnvelope(Structure):
-    "Represents the OGREnvelope C Structure."
+    "Represent the OGREnvelope C Structure."
     _fields_ = [("MinX", c_double),
                 ("MaxX", c_double),
                 ("MinY", c_double),
@@ -26,7 +27,7 @@ class OGREnvelope(Structure):
                 ]
 
 
-class Envelope(object):
+class Envelope:
     """
     The Envelope object is a C structure that contains the minimum and
     maximum X, Y coordinates for a rectangle bounding box.  The naming
@@ -46,27 +47,27 @@ class Envelope(object):
             elif isinstance(args[0], (tuple, list)):
                 # A tuple was passed in.
                 if len(args[0]) != 4:
-                    raise OGRException('Incorrect number of tuple elements (%d).' % len(args[0]))
+                    raise GDALException('Incorrect number of tuple elements (%d).' % len(args[0]))
                 else:
                     self._from_sequence(args[0])
             else:
-                raise TypeError('Incorrect type of argument: %s' % str(type(args[0])))
+                raise TypeError('Incorrect type of argument: %s' % type(args[0]))
         elif len(args) == 4:
             # Individual parameters passed in.
             #  Thanks to ww for the help
             self._from_sequence([float(a) for a in args])
         else:
-            raise OGRException('Incorrect number (%d) of arguments.' % len(args))
+            raise GDALException('Incorrect number (%d) of arguments.' % len(args))
 
         # Checking the x,y coordinates
         if self.min_x > self.max_x:
-            raise OGRException('Envelope minimum X > maximum X.')
+            raise GDALException('Envelope minimum X > maximum X.')
         if self.min_y > self.max_y:
-            raise OGRException('Envelope minimum Y > maximum Y.')
+            raise GDALException('Envelope minimum Y > maximum Y.')
 
     def __eq__(self, other):
         """
-        Returns True if the envelopes are equivalent; can compare against
+        Return True if the envelopes are equivalent; can compare against
         other Envelopes and 4-tuples.
         """
         if isinstance(other, Envelope):
@@ -76,14 +77,14 @@ class Envelope(object):
             return (self.min_x == other[0]) and (self.min_y == other[1]) and \
                    (self.max_x == other[2]) and (self.max_y == other[3])
         else:
-            raise OGRException('Equivalence testing only works with other Envelopes.')
+            raise GDALException('Equivalence testing only works with other Envelopes.')
 
     def __str__(self):
-        "Returns a string representation of the tuple."
+        "Return a string representation of the tuple."
         return str(self.tuple)
 
     def _from_sequence(self, seq):
-        "Initializes the C OGR Envelope structure from the given sequence."
+        "Initialize the C OGR Envelope structure from the given sequence."
         self._envelope = OGREnvelope()
         self._envelope.MinX = seq[0]
         self._envelope.MinY = seq[1]
@@ -92,7 +93,7 @@ class Envelope(object):
 
     def expand_to_include(self, *args):
         """
-        Modifies the envelope to expand to include the boundaries of
+        Modify the envelope to expand to include the boundaries of
         the passed-in 2-tuple (a point), 4-tuple (an extent) or
         envelope.
         """
@@ -120,9 +121,9 @@ class Envelope(object):
                     if maxy > self._envelope.MaxY:
                         self._envelope.MaxY = maxy
                 else:
-                    raise OGRException('Incorrect number of tuple elements (%d).' % len(args[0]))
+                    raise GDALException('Incorrect number of tuple elements (%d).' % len(args[0]))
             else:
-                raise TypeError('Incorrect type of argument: %s' % str(type(args[0])))
+                raise TypeError('Incorrect type of argument: %s' % type(args[0]))
         elif len(args) == 2:
             # An x and an y parameter were passed in
                 return self.expand_to_include((args[0], args[1], args[0], args[1]))
@@ -130,46 +131,46 @@ class Envelope(object):
             # Individual parameters passed in.
             return self.expand_to_include(args)
         else:
-            raise OGRException('Incorrect number (%d) of arguments.' % len(args[0]))
+            raise GDALException('Incorrect number (%d) of arguments.' % len(args[0]))
 
     @property
     def min_x(self):
-        "Returns the value of the minimum X coordinate."
+        "Return the value of the minimum X coordinate."
         return self._envelope.MinX
 
     @property
     def min_y(self):
-        "Returns the value of the minimum Y coordinate."
+        "Return the value of the minimum Y coordinate."
         return self._envelope.MinY
 
     @property
     def max_x(self):
-        "Returns the value of the maximum X coordinate."
+        "Return the value of the maximum X coordinate."
         return self._envelope.MaxX
 
     @property
     def max_y(self):
-        "Returns the value of the maximum Y coordinate."
+        "Return the value of the maximum Y coordinate."
         return self._envelope.MaxY
 
     @property
     def ur(self):
-        "Returns the upper-right coordinate."
+        "Return the upper-right coordinate."
         return (self.max_x, self.max_y)
 
     @property
     def ll(self):
-        "Returns the lower-left coordinate."
+        "Return the lower-left coordinate."
         return (self.min_x, self.min_y)
 
     @property
     def tuple(self):
-        "Returns a tuple representing the envelope."
+        "Return a tuple representing the envelope."
         return (self.min_x, self.min_y, self.max_x, self.max_y)
 
     @property
     def wkt(self):
-        "Returns WKT representing a Polygon for this envelope."
+        "Return WKT representing a Polygon for this envelope."
         # TODO: Fix significant figures.
         return 'POLYGON((%s %s,%s %s,%s %s,%s %s,%s %s))' % \
                (self.min_x, self.min_y, self.min_x, self.max_y,

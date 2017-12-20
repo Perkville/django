@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
+from django.core.checks import register
 from django.db import models
 
 
@@ -9,11 +7,10 @@ class SimpleModel(models.Model):
     manager = models.manager.Manager()
 
 
-class Book(models.Model):
-    title = models.CharField(max_length=250)
-    is_published = models.BooleanField(default=False)
+@register('tests')
+def my_check(app_configs, **kwargs):
+    my_check.did_run = True
+    return []
 
 
-class BlogPost(models.Model):
-    title = models.CharField(max_length=250)
-    is_published = models.BooleanField(default=False)
+my_check.did_run = False
