@@ -5,6 +5,7 @@ import uuid
 from django.conf import settings
 from django.db.backends.base.operations import BaseDatabaseOperations
 from django.db.backends.utils import strip_quotes, truncate_name
+from django.db.utils import DatabaseError
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 
@@ -50,6 +51,9 @@ END;
 
     # Oracle doesn't support string without precision; use the max string size.
     cast_char_field_without_max_length = 'NVARCHAR2(2000)'
+    cast_data_types = {
+        'TextField': cast_char_field_without_max_length,
+    }
 
     def cache_key_culling_sql(self):
         return """
@@ -77,6 +81,8 @@ END;
             return "TRUNC(%s, '%s')" % (field_name, lookup_type.upper())
         elif lookup_type == 'quarter':
             return "TRUNC(%s, 'Q')" % field_name
+        elif lookup_type == 'week':
+            return "TRUNC(%s, 'IW')" % field_name
         else:
             return "TRUNC(%s)" % field_name
 
@@ -115,6 +121,8 @@ END;
             sql = "TRUNC(%s, '%s')" % (field_name, lookup_type.upper())
         elif lookup_type == 'quarter':
             sql = "TRUNC(%s, 'Q')" % field_name
+        elif lookup_type == 'week':
+            sql = "TRUNC(%s, 'IW')" % field_name
         elif lookup_type == 'day':
             sql = "TRUNC(%s)" % field_name
         elif lookup_type == 'hour':
@@ -217,7 +225,14 @@ END;
         return " DEFERRABLE INITIALLY DEFERRED"
 
     def fetch_returned_insert_id(self, cursor):
-        return int(cursor._insert_id_var.getvalue())
+        try:
+            return int(cursor._insert_id_var.getvalue())
+        except TypeError:
+            raise DatabaseError(
+                'The database did not return a new row id. Probably "ORA-1403: '
+                'no data found" was raised internally but was hidden by the '
+                'Oracle OCI library (see https://code.djangoproject.com/ticket/28859).'
+            )
 
     def field_cast_sql(self, db_type, internal_type):
         if db_type and db_type.endswith('LOB'):

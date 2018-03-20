@@ -65,6 +65,9 @@ class Combinable:
     # OPERATORS #
     #############
 
+    def __neg__(self):
+        return self._combine(-1, self.MUL, False)
+
     def __add__(self, other):
         return self._combine(other, self.ADD, False)
 
@@ -200,24 +203,15 @@ class BaseExpression:
 
     @cached_property
     def contains_aggregate(self):
-        for expr in self.get_source_expressions():
-            if expr and expr.contains_aggregate:
-                return True
-        return False
+        return any(expr and expr.contains_aggregate for expr in self.get_source_expressions())
 
     @cached_property
     def contains_over_clause(self):
-        for expr in self.get_source_expressions():
-            if expr and expr.contains_over_clause:
-                return True
-        return False
+        return any(expr and expr.contains_over_clause for expr in self.get_source_expressions())
 
     @cached_property
     def contains_column_references(self):
-        for expr in self.get_source_expressions():
-            if expr and expr.contains_column_references:
-                return True
-        return False
+        return any(expr and expr.contains_column_references for expr in self.get_source_expressions())
 
     def resolve_expression(self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False):
         """
@@ -321,8 +315,10 @@ class BaseExpression:
 
     def relabeled_clone(self, change_map):
         clone = self.copy()
-        clone.set_source_expressions(
-            [e.relabeled_clone(change_map) for e in self.get_source_expressions()])
+        clone.set_source_expressions([
+            e.relabeled_clone(change_map) if e is not None else None
+            for e in self.get_source_expressions()
+        ])
         return clone
 
     def copy(self):
@@ -375,7 +371,12 @@ class BaseExpression:
 
     def __hash__(self):
         path, args, kwargs = self.deconstruct()
-        return hash((path,) + args + tuple(kwargs.items()))
+        kwargs = kwargs.copy()
+        output_field = type(kwargs.pop('output_field', None))
+        return hash((path, output_field) + args + tuple([
+            (key, tuple(value)) if isinstance(value, list) else (key, value)
+            for key, value in kwargs.items()
+        ]))
 
 
 class Expression(BaseExpression, Combinable):
@@ -529,6 +530,9 @@ class ResolvedOuterRef(F):
         )
 
     def _prepare(self, output_field=None):
+        return self
+
+    def relabeled_clone(self, relabels):
         return self
 
 
@@ -818,6 +822,8 @@ class When(Expression):
             condition, lookups = Q(**lookups), None
         if condition is None or not getattr(condition, 'conditional', False) or lookups:
             raise TypeError("__init__() takes either a Q object or lookups as keyword arguments")
+        if isinstance(condition, Q) and not condition:
+            raise ValueError("An empty Q() can't be used as a When() condition.")
         super().__init__(output_field=None)
         self.condition = condition
         self.result = self._parse_expressions(then)[0]
@@ -954,9 +960,12 @@ class Subquery(Expression):
     def __init__(self, queryset, output_field=None, **extra):
         self.queryset = queryset
         self.extra = extra
-        if output_field is None and len(self.queryset.query.select) == 1:
-            output_field = self.queryset.query.select[0].field
         super().__init__(output_field)
+
+    def _resolve_output_field(self):
+        if len(self.queryset.query.select) == 1:
+            return self.queryset.query.select[0].field
+        return super()._resolve_output_field()
 
     def copy(self):
         clone = super().copy()
@@ -1045,11 +1054,11 @@ class Exists(Subquery):
     def __invert__(self):
         return type(self)(self.queryset, negated=(not self.negated), **self.extra)
 
-    def resolve_expression(self, query=None, **kwargs):
+    def resolve_expression(self, query=None, *args, **kwargs):
         # As a performance optimization, remove ordering since EXISTS doesn't
         # care about it, just whether or not a row matches.
         self.queryset = self.queryset.order_by()
-        return super().resolve_expression(query, **kwargs)
+        return super().resolve_expression(query, *args, **kwargs)
 
     def as_sql(self, compiler, connection, template=None, **extra_context):
         sql, params = super().as_sql(compiler, connection, template, **extra_context)

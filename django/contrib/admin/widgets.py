@@ -6,6 +6,7 @@ import json
 
 from django import forms
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db.models.deletion import CASCADE
 from django.urls import reverse
 from django.urls.exceptions import NoReverseMatch
@@ -183,7 +184,7 @@ class ForeignKeyRawIdWidget(forms.TextInput):
         key = self.rel.get_related_field().name
         try:
             obj = self.rel.model._default_manager.using(self.db).get(**{key: value})
-        except (ValueError, self.rel.model.DoesNotExist):
+        except (ValueError, self.rel.model.DoesNotExist, ValidationError):
             return '', ''
 
         try:
@@ -370,8 +371,9 @@ SELECT2_TRANSLATIONS = {x.lower(): x for x in [
     'eu', 'fa', 'fi', 'fr', 'gl', 'he', 'hi', 'hr', 'hu', 'id', 'is',
     'it', 'ja', 'km', 'ko', 'lt', 'lv', 'mk', 'ms', 'nb', 'nl', 'pl',
     'pt-BR', 'pt', 'ro', 'ru', 'sk', 'sr-Cyrl', 'sr', 'sv', 'th',
-    'tr', 'uk', 'vi', 'zh-CN', 'zh-TW',
+    'tr', 'uk', 'vi',
 ]}
+SELECT2_TRANSLATIONS.update({'zh-hans': 'zh-CN', 'zh-hant': 'zh-TW'})
 
 
 class AutocompleteMixin:
@@ -388,10 +390,7 @@ class AutocompleteMixin:
         self.admin_site = admin_site
         self.db = using
         self.choices = choices
-        if attrs is not None:
-            self.attrs = attrs.copy()
-        else:
-            self.attrs = {}
+        self.attrs = {} if attrs is None else attrs.copy()
 
     def get_url(self):
         model = self.rel.model
@@ -414,7 +413,7 @@ class AutocompleteMixin:
             'data-theme': 'admin-autocomplete',
             'data-allow-clear': json.dumps(not self.is_required),
             'data-placeholder': '',  # Allows clearing of the input.
-            'class': attrs['class'] + 'admin-autocomplete',
+            'class': attrs['class'] + (' ' if attrs['class'] else '') + 'admin-autocomplete',
         })
         return attrs
 
@@ -438,8 +437,7 @@ class AutocompleteMixin:
                 str(option_value) in value and
                 (has_selected is False or self.allow_multiple_selected)
             )
-            if selected is True and has_selected is False:
-                has_selected = True
+            has_selected |= selected
             index = len(default[1])
             subgroup = default[1]
             subgroup.append(self.create_option(name, option_value, option_label, selected_choices, index))
