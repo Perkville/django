@@ -8,8 +8,8 @@ from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
 from django.utils.six.moves import range
 
 from .models import (
-    A, M, MR, R, S, T, Avatar, Base, Child, HiddenUser, HiddenUserProfile,
-    M2MFrom, M2MTo, MRNull, Parent, RChild, User, create_a, get_default_r,
+    MR, A, Avatar, Base, Child, HiddenUser, HiddenUserProfile, M, M2MFrom,
+    M2MTo, MRNull, Parent, R, RChild, S, T, User, create_a, get_default_r,
 )
 
 
@@ -348,6 +348,17 @@ class DeletionTests(TestCase):
         self.assertNumQueries(expected_num_queries, s.delete)
         self.assertFalse(S.objects.exists())
         self.assertFalse(T.objects.exists())
+
+    def test_proxied_model_duplicate_queries(self):
+        """
+        #25685 - Deleting instances of a model with existing proxy
+        classes should not issue multiple queries during cascade
+        deletion of referring models.
+        """
+        avatar = Avatar.objects.create()
+        # One query for the Avatar table and a second for the User one.
+        with self.assertNumQueries(2):
+            avatar.delete()
 
 
 class FastDeleteTests(TestCase):

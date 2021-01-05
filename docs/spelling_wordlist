@@ -286,8 +286,6 @@ iendswith
 ies
 iexact
 ifchanged
-ifequal
-ifnotequal
 iframe
 inbox
 Incompliance
@@ -453,6 +451,7 @@ pgAdmin
 phishing
 php
 pickleable
+picklable
 picosecond
 PIL
 pingback
@@ -512,6 +511,8 @@ Quickstart
 quoteless
 Radziej
 rc
+readded
+reallow
 reallowed
 rebase
 rebased
@@ -631,6 +632,9 @@ subselect
 substr
 subtemplate
 subtemplates
+subtransactions
+subtree
+subtype
 subviews
 subwidgets
 symlink
@@ -694,6 +698,7 @@ unescaped
 ungrouped
 unhandled
 unharmful
+unhashable
 unicode
 uninstall
 uninstalling

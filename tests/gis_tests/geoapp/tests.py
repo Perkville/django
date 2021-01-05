@@ -11,7 +11,7 @@ from django.test import TestCase, ignore_warnings, skipUnlessDBFeature
 from django.utils import six
 from django.utils.deprecation import RemovedInDjango110Warning
 
-from ..utils import no_oracle, oracle, postgis, spatialite
+from ..utils import no_oracle, oracle, postgis, skipUnlessGISLookup, spatialite
 
 if HAS_GEOS:
     from django.contrib.gis.db.models import Extent, MakeLine, Union
@@ -76,7 +76,7 @@ class GeoModelTest(TestCase):
         nullcity.delete()
 
         # Testing on a Polygon
-        shell = LinearRing((0, 0), (0, 100), (100, 100), (100, 0), (0, 0))
+        shell = LinearRing((0, 0), (0, 90), (100, 90), (100, 0), (0, 0))
         inner = LinearRing((40, 40), (40, 60), (60, 60), (60, 40), (40, 40))
 
         # Creating a State object using a built Polygon
@@ -346,6 +346,20 @@ class GeoLookupTest(TestCase):
         self.assertEqual(2, len(qs))
         for c in qs:
             self.assertIn(c.name, cities)
+
+    @skipUnlessGISLookup("strictly_above", "strictly_below")
+    def test_strictly_above_below_lookups(self):
+        dallas = City.objects.get(name='Dallas')
+        self.assertQuerysetEqual(
+            City.objects.filter(point__strictly_above=dallas.point).order_by('name'),
+            ['Chicago', 'Lawrence', 'Oklahoma City', 'Pueblo', 'Victoria'],
+            lambda b: b.name
+        )
+        self.assertQuerysetEqual(
+            City.objects.filter(point__strictly_below=dallas.point).order_by('name'),
+            ['Houston', 'Wellington'],
+            lambda b: b.name
+        )
 
     def test_equals_lookups(self):
         "Testing the 'same_as' and 'equals' lookup types."

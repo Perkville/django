@@ -101,20 +101,24 @@ middleware; if so this middleware must be listed first in
     In Django 1.7, the trailing dot is stripped when performing host validation,
     thus an entry with a trailing dot isn't required.
 
-.. _`fully qualified domain name (FQDN)`: http://en.wikipedia.org/wiki/Fully_qualified_domain_name
+.. _`fully qualified domain name (FQDN)`: https://en.wikipedia.org/wiki/Fully_qualified_domain_name
 
 If the ``Host`` header (or ``X-Forwarded-Host`` if
 :setting:`USE_X_FORWARDED_HOST` is enabled) does not match any value in this
 list, the :meth:`django.http.HttpRequest.get_host()` method will raise
 :exc:`~django.core.exceptions.SuspiciousOperation`.
 
-When :setting:`DEBUG` is ``True`` or when running tests, host validation is
-disabled; any host will be accepted. Thus it's usually only necessary to set it
-in production.
+When :setting:`DEBUG` is ``True`` and ``ALLOWED_HOSTS`` is empty, the host
+is validated against ``['localhost', '127.0.0.1', '[::1]']``.
 
 This validation only applies via :meth:`~django.http.HttpRequest.get_host()`;
 if your code accesses the ``Host`` header directly from ``request.META`` you
 are bypassing this security protection.
+
+.. versionchanged:: 1.8.16
+
+    In older versions, ``ALLOWED_HOSTS`` wasn't checked if ``DEBUG=True``, but
+    it's now checked to prevent a DNS rebinding attack.
 
 .. setting:: ALLOWED_INCLUDE_ROOTS
 
@@ -388,7 +392,8 @@ CSRF_COOKIE_NAME
 Default: ``'csrftoken'``
 
 The name of the cookie to use for the CSRF authentication token. This can be
-whatever you want. See :doc:`/ref/csrf`.
+whatever you want (as long as it's different from the other cookie names in
+your application). See :doc:`/ref/csrf`.
 
 .. setting:: CSRF_COOKIE_PATH
 
@@ -482,8 +487,8 @@ ATOMIC_REQUESTS
 
 Default: ``False``
 
-Set this to ``True`` to wrap each HTTP request in a transaction on this
-database. See :ref:`tying-transactions-to-http-requests`.
+Set this to ``True`` to wrap each view in a transaction on this database. See
+:ref:`tying-transactions-to-http-requests`.
 
 .. setting:: DATABASE-AUTOCOMMIT
 
@@ -622,8 +627,22 @@ TEST
 Default: ``{}``
 
 A dictionary of settings for test databases; for more details about the
-creation and use of test databases, see :ref:`the-test-database`. The
-following entries are available:
+creation and use of test databases, see :ref:`the-test-database`.
+
+Here's an example with a test database configuration::
+
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'USER': 'mydatabaseuser',
+            'NAME': 'mydatabase',
+            'TEST': {
+                'NAME': 'mytestdatabase',
+            },
+        },
+    }
+
+The following keys in the ``TEST`` dictionary are available:
 
 .. setting:: TEST_CHARSET
 
@@ -758,7 +777,11 @@ Default: ``None``
 This is an Oracle-specific setting.
 
 The password to use when connecting to the Oracle database that will be used
-when running tests. If not provided, Django will use a hardcoded default value.
+when running tests. If not provided, Django will generate a random password.
+
+.. versionchanged:: 1.8.16
+
+    Older versions used a hardcoded default password.
 
 .. setting:: TEST_TBLSPACE
 
@@ -1641,9 +1664,12 @@ Default: ``()`` (Empty tuple)
 
 A tuple of IP addresses, as strings, that:
 
-* See debug comments, when :setting:`DEBUG` is ``True``
-* Receive X headers in admindocs if the ``XViewMiddleware`` is installed (see
-  :doc:`/ref/contrib/admin/admindocs`)
+* Allow the :func:`~django.template.context_processors.debug` context processor
+  to add some variables to the template context.
+* Can use the :ref:`admindocs bookmarklets <admindocs-bookmarklets>` even if
+  not logged in as a staff user.
+* Are marked as "internal" (as opposed to "EXTERNAL") in
+  :class:`~django.utils.log.AdminEmailHandler` emails.
 
 .. setting:: LANGUAGE_CODE
 
@@ -1718,8 +1744,8 @@ LANGUAGE_COOKIE_NAME
 Default: ``'django_language'``
 
 The name of the cookie to use for the language cookie. This can be whatever
-you want (but should be different from :setting:`SESSION_COOKIE_NAME`). See
-:doc:`/topics/i18n/index`.
+you want (as long as it's different from the other cookie names in your
+application). See :doc:`/topics/i18n/index`.
 
 .. setting:: LANGUAGE_COOKIE_PATH
 
@@ -2407,7 +2433,10 @@ OPTIONS
 Default: ``{}`` (Empty dict)
 
 Extra parameters to pass to the template backend. Available parameters vary
-depending on the template backend.
+depending on the template backend. See
+:class:`~django.template.backends.django.DjangoTemplates` and
+:class:`~django.template.backends.jinja2.Jinja2` for the options of the
+built-in backends.
 
 .. setting:: TEMPLATE_CONTEXT_PROCESSORS
 
@@ -2649,7 +2678,7 @@ to ensure your processes are running in the correct environment.
     If you're running Django on Windows, :setting:`TIME_ZONE` must be set to
     match the system time zone.
 
-.. _list of time zones: http://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+.. _list of time zones: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 
 .. _pytz: http://pytz.sourceforge.net/
 
@@ -2845,9 +2874,14 @@ The URL where requests are redirected after login when the
 This is used by the :func:`~django.contrib.auth.decorators.login_required`
 decorator, for example.
 
-This setting also accepts view function names and :ref:`named URL patterns
-<naming-url-patterns>` which can be used to reduce configuration duplication
-since you don't have to define the URL in two places (``settings`` and URLconf).
+This setting also accepts :ref:`named URL patterns <naming-url-patterns>` which
+can be used to reduce configuration duplication since you don't have to define
+the URL in two places (``settings`` and URLconf).
+
+.. deprecated:: 1.8
+
+    The setting may also be a dotted Python path to a view function. Support
+    for this will be removed in Django 1.10.
 
 .. setting:: LOGIN_URL
 
@@ -2859,18 +2893,14 @@ Default: ``'/accounts/login/'``
 The URL where requests are redirected for login, especially when using the
 :func:`~django.contrib.auth.decorators.login_required` decorator.
 
-This setting also accepts view function names and :ref:`named URL patterns
-<naming-url-patterns>` which can be used to reduce configuration duplication
-since you don't have to define the URL in two places (``settings`` and URLconf).
+This setting also accepts :ref:`named URL patterns <naming-url-patterns>` which
+can be used to reduce configuration duplication since you don't have to define
+the URL in two places (``settings`` and URLconf).
 
-.. setting:: LOGOUT_URL
+.. deprecated:: 1.8
 
-LOGOUT_URL
-----------
-
-Default: ``'/accounts/logout/'``
-
-LOGIN_URL counterpart.
+    The setting may also be a dotted Python path to a view function. Support
+    for this will be removed in Django 1.10.
 
 .. setting:: PASSWORD_RESET_TIMEOUT_DAYS
 
@@ -3061,8 +3091,8 @@ SESSION_COOKIE_NAME
 
 Default: ``'sessionid'``
 
-The name of the cookie to use for sessions. This can be whatever you want (but
-should be different from :setting:`LANGUAGE_COOKIE_NAME`).
+The name of the cookie to use for sessions. This can be whatever you want
+(as long as it's different from the other cookie names in your application).
 
 .. setting:: SESSION_COOKIE_PATH
 
@@ -3148,7 +3178,8 @@ Default: ``False``
 
 Whether to save the session data on every request. If this is ``False``
 (default), then the session data will only be saved if it has been modified --
-that is, if any of its dictionary values have been assigned or deleted.
+that is, if any of its dictionary values have been assigned or deleted. Empty
+sessions won't be created, even if this setting is active.
 
 .. setting:: SESSION_SERIALIZER
 

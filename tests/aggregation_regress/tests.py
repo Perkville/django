@@ -8,7 +8,7 @@ from operator import attrgetter
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldError
 from django.db.models import (
-    F, Q, Avg, Count, Max, StdDev, Sum, Value, Variance,
+    Avg, Count, F, Max, Q, StdDev, Sum, Value, Variance,
 )
 from django.test import TestCase, skipUnlessDBFeature
 from django.test.utils import Approximate
@@ -568,7 +568,7 @@ class AggregationTests(TestCase):
             lambda b: b.name
         )
 
-        # Regression for #10248 - Annotations work with DateQuerySets
+        # Regression for #10248 - Annotations work with dates()
         qs = Book.objects.annotate(num_authors=Count('authors')).filter(num_authors=2).dates('pubdate', 'day')
         self.assertQuerysetEqual(
             qs, [
@@ -1113,9 +1113,9 @@ class AggregationTests(TestCase):
         in group by.
         """
         qs = Book.objects.annotate(
-            acount=Count('authors')
+            account=Count('authors')
         ).filter(
-            acount=F('publisher__num_awards')
+            account=F('publisher__num_awards')
         )
         self.assertQuerysetEqual(
             qs, ['Sams Teach Yourself Django in 24 Hours'],

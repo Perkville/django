@@ -20,8 +20,13 @@ from django.utils.deprecation import (
     RemovedInDjango19Warning, RemovedInDjango110Warning,
 )
 
+# Make deprecation warnings errors to ensure no usage of deprecated features.
 warnings.simplefilter("error", RemovedInDjango19Warning)
 warnings.simplefilter("error", RemovedInDjango110Warning)
+# Make runtime warning errors to ensure no usage of error prone patterns.
+warnings.simplefilter("error", RuntimeWarning)
+# Ignore known warnings in test dependencies.
+warnings.filterwarnings("ignore", "'U' mode is deprecated", DeprecationWarning, module='docutils.io')
 
 RUNTESTS_DIR = os.path.abspath(os.path.dirname(upath(__file__)))
 
@@ -111,8 +116,6 @@ def setup(verbosity, test_labels):
     state = {
         'INSTALLED_APPS': settings.INSTALLED_APPS,
         'ROOT_URLCONF': getattr(settings, "ROOT_URLCONF", ""),
-        # Remove the following line in Django 1.10.
-        'TEMPLATE_DIRS': settings.TEMPLATE_DIRS,
         'TEMPLATES': settings.TEMPLATES,
         'LANGUAGE_CODE': settings.LANGUAGE_CODE,
         'STATIC_URL': settings.STATIC_URL,
@@ -125,8 +128,6 @@ def setup(verbosity, test_labels):
     settings.ROOT_URLCONF = 'urls'
     settings.STATIC_URL = '/static/'
     settings.STATIC_ROOT = os.path.join(TMPDIR, 'static')
-    # Remove the following line in Django 1.10.
-    settings.TEMPLATE_DIRS = (TEMPLATE_DIR,)
     settings.TEMPLATES = [{
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': [TEMPLATE_DIR],

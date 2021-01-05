@@ -130,7 +130,8 @@ class TestQuerying(TestCase):
 
 
 class TestSerialization(TestCase):
-    test_data = '[{"fields": {"field": "{\\"a\\": \\"b\\"}"}, "model": "postgres_tests.hstoremodel", "pk": null}]'
+    test_data = ('[{"fields": {"field": "{\\"a\\": \\"b\\"}"}, '
+                 '"model": "postgres_tests.hstoremodel", "pk": null}]')
 
     def test_dumping(self):
         instance = HStoreModel(field={'a': 'b'})
@@ -140,6 +141,12 @@ class TestSerialization(TestCase):
     def test_loading(self):
         instance = list(serializers.deserialize('json', self.test_data))[0].object
         self.assertEqual(instance.field, {'a': 'b'})
+
+    def test_roundtrip_with_null(self):
+        instance = HStoreModel(field={'a': 'b', 'c': None})
+        data = serializers.serialize('json', [instance])
+        new_instance = list(serializers.deserialize('json', data))[0].object
+        self.assertEqual(instance.field, new_instance.field)
 
 
 class TestValidation(TestCase):
@@ -181,11 +188,26 @@ class TestFormField(TestCase):
         form_field = model_field.formfield()
         self.assertIsInstance(form_field, forms.HStoreField)
 
-    def test_empty_field_has_not_changed(self):
+    def test_field_has_changed(self):
         class HStoreFormTest(Form):
-            f1 = HStoreField()
+            f1 = forms.HStoreField()
         form_w_hstore = HStoreFormTest()
         self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'})
+        self.assertTrue(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'}, initial={'f1': '{"a": 1}'})
+        self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 2}'}, initial={'f1': '{"a": 1}'})
+        self.assertTrue(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'}, initial={'f1': {"a": 1}})
+        self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 2}'}, initial={'f1': {"a": 1}})
+        self.assertTrue(form_w_hstore.has_changed())
 
 
 class TestValidator(TestCase):

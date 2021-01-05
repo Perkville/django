@@ -30,18 +30,20 @@ from .models import (
     EmptyModelHidden, EmptyModelMixin, EmptyModelVisible, ExplicitlyProvidedPK,
     ExternalSubscriber, Fabric, FancyDoodad, FieldOverridePost,
     FilteredManager, FooAccount, FoodDelivery, FunkyTag, Gadget, Gallery,
-    Grommet, ImplicitlyGeneratedPK, Ingredient, InlineReference, InlineReferer,
-    Inquisition, Language, Link, MainPrepopulated, ModelWithStringPrimaryKey,
-    NotReferenced, OldSubscriber, OtherStory, Paper, Parent,
-    ParentWithDependentChildren, Person, Persona, Picture, Pizza, Plot,
-    PlotDetails, PluggableSearchPerson, Podcast, Post, PrePopulatedPost,
+    GenRelReference, Grommet, ImplicitlyGeneratedPK, Ingredient,
+    InlineReference, InlineReferer, Inquisition, Language, Link,
+    MainPrepopulated, ModelWithStringPrimaryKey, NotReferenced, OldSubscriber,
+    OtherStory, Paper, Parent, ParentWithDependentChildren, ParentWithUUIDPK,
+    Person, Persona, Picture, Pizza, Plot, PlotDetails, PlotProxy,
+    PluggableSearchPerson, Podcast, Post, PrePopulatedPost,
     PrePopulatedPostLargeSlug, PrePopulatedSubPost, Promo, Question, Recipe,
-    Recommendation, Recommender, ReferencedByInline, ReferencedByParent,
-    RelatedPrepopulated, Report, Reservation, Restaurant,
-    RowLevelChangePermissionModel, Section, ShortMessage, Simple, Sketch,
-    State, Story, StumpJoke, Subscriber, SuperVillain, Telegram, Thing,
-    Topping, UnchangeableObject, UndeletableObject, UnorderedObject,
-    UserMessenger, Villain, Vodcast, Whatsit, Widget, Worker, WorkHour,
+    Recommendation, Recommender, ReferencedByGenRel, ReferencedByInline,
+    ReferencedByParent, RelatedPrepopulated, RelatedWithUUIDPKModel, Report,
+    Reservation, Restaurant, RowLevelChangePermissionModel, Section,
+    ShortMessage, Simple, Sketch, State, Story, StumpJoke, Subscriber,
+    SuperVillain, Telegram, Thing, Topping, UnchangeableObject,
+    UndeletableObject, UnorderedObject, UserMessenger, Villain, Vodcast,
+    Whatsit, Widget, Worker, WorkHour,
 )
 
 
@@ -86,7 +88,8 @@ class ChapterXtra1Admin(admin.ModelAdmin):
 
 class ArticleAdmin(admin.ModelAdmin):
     list_display = ('content', 'date', callable_year, 'model_year',
-                    'modeladmin_year', 'model_year_reversed')
+                    'modeladmin_year', 'model_year_reversed', 'section')
+    list_editable = ('section',)
     list_filter = ('date', 'section')
     view_on_site = False
     fieldsets = (
@@ -169,7 +172,11 @@ class ThingAdmin(admin.ModelAdmin):
 
 
 class InquisitionAdmin(admin.ModelAdmin):
-    list_display = ('leader', 'country', 'expected')
+    list_display = ('leader', 'country', 'expected', 'sketch')
+
+    def sketch(self, obj):
+        # A method with the same name as a reverse accessor.
+        return 'list-display-sketch'
 
 
 class SketchAdmin(admin.ModelAdmin):
@@ -377,7 +384,7 @@ class LinkInline(admin.TabularInline):
     model = Link
     extra = 1
 
-    readonly_fields = ("posted", "multiline")
+    readonly_fields = ("posted", "multiline", "readonly_link_content")
 
     def multiline(self, instance):
         return "InlineMultiline\ntest\nstring"
@@ -424,7 +431,7 @@ class PostAdmin(admin.ModelAdmin):
     list_display = ['title', 'public']
     readonly_fields = (
         'posted', 'awesomeness_level', 'coolness', 'value',
-        'multiline', 'multiline_html', lambda obj: "foo"
+        'multiline', 'multiline_html', lambda obj: "foo", 'readonly_content',
     )
 
     inlines = [
@@ -848,6 +855,10 @@ class InlineRefererAdmin(admin.ModelAdmin):
     inlines = [InlineReferenceInline]
 
 
+class PlotReadonlyAdmin(admin.ModelAdmin):
+    readonly_fields = ('plotdetails',)
+
+
 class GetFormsetsArgumentCheckingAdmin(admin.ModelAdmin):
     fields = ['name']
 
@@ -902,6 +913,7 @@ site.register(Villain)
 site.register(SuperVillain)
 site.register(Plot)
 site.register(PlotDetails)
+site.register(PlotProxy, PlotReadonlyAdmin)
 site.register(CyclicOne)
 site.register(CyclicTwo)
 site.register(WorkHour, WorkHourAdmin)
@@ -928,6 +940,8 @@ site.register(ReferencedByParent)
 site.register(ChildOfReferer)
 site.register(ReferencedByInline)
 site.register(InlineReferer, InlineRefererAdmin)
+site.register(ReferencedByGenRel)
+site.register(GenRelReference)
 
 # We intentionally register Promo and ChapterXtra1 but not Chapter nor ChapterXtra2.
 # That way we cover all four cases:
@@ -977,5 +991,13 @@ site.register(Group, GroupAdmin)
 site2 = admin.AdminSite(name="namespaced_admin")
 site2.register(User, UserAdmin)
 site2.register(Group, GroupAdmin)
+site2.register(ParentWithUUIDPK)
+site2.register(
+    RelatedWithUUIDPKModel,
+    list_display=['pk', 'parent'],
+    list_editable=['parent'],
+    raw_id_fields=['parent'],
+)
+
 site7 = admin.AdminSite(name="admin7")
 site7.register(Article, ArticleAdmin2)

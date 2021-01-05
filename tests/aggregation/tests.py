@@ -7,7 +7,7 @@ from decimal import Decimal
 from django.core.exceptions import FieldError
 from django.db import connection
 from django.db.models import (
-    F, Aggregate, Avg, Count, DecimalField, FloatField, Func, IntegerField,
+    Aggregate, Avg, Count, DecimalField, F, FloatField, Func, IntegerField,
     Max, Min, Sum, Value,
 )
 from django.test import TestCase, ignore_warnings
@@ -305,6 +305,12 @@ class BaseAggregateTestCase(TestCase):
 
         vals = Book.objects.aggregate(Count("rating", distinct=True))
         self.assertEqual(vals, {"rating__count": 4})
+
+    def test_count_star(self):
+        with self.assertNumQueries(1) as ctx:
+            Book.objects.aggregate(n=Count("*"))
+        sql = ctx.captured_queries[0]['sql']
+        self.assertIn('SELECT COUNT(*) ', sql)
 
     def test_fkey_aggregate(self):
         explicit = list(Author.objects.annotate(Count('book__id')))

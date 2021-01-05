@@ -11,7 +11,7 @@ from django.db.models.aggregates import (
     Avg, Count, Max, Min, StdDev, Sum, Variance,
 )
 from django.db.models.expressions import (
-    F, Case, Col, Date, DateTime, ExpressionWrapper, Func, OrderBy, Random,
+    Case, Col, Date, DateTime, ExpressionWrapper, F, Func, OrderBy, Random,
     RawSQL, Ref, Value, When,
 )
 from django.db.models.functions import (
@@ -56,6 +56,18 @@ class BasicExpressionsTests(TestCase):
             output_field=models.IntegerField()),
         )
         self.assertEqual(companies['result'], 2395)
+
+    def test_annotate_values_filter(self):
+        companies = Company.objects.annotate(
+            foo=RawSQL('%s', ['value']),
+        ).filter(foo='value').order_by('name')
+        self.assertQuerysetEqual(
+            companies, [
+                '<Company: Example Inc.>',
+                '<Company: Foobar Ltd.>',
+                '<Company: Test GmbH>',
+            ],
+        )
 
     def test_filter_inter_attribute(self):
         # We can filter on attribute relationships on same model obj, e.g.
@@ -877,6 +889,7 @@ class ReprTests(TestCase):
     def test_aggregates(self):
         self.assertEqual(repr(Avg('a')), "Avg(F(a))")
         self.assertEqual(repr(Count('a')), "Count(F(a), distinct=False)")
+        self.assertEqual(repr(Count('*')), "Count('*', distinct=False)")
         self.assertEqual(repr(Max('a')), "Max(F(a))")
         self.assertEqual(repr(Min('a')), "Min(F(a))")
         self.assertEqual(repr(StdDev('a')), "StdDev(F(a), sample=False)")

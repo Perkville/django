@@ -18,7 +18,7 @@ from django.db.models.aggregates import Count
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import Col, Ref
 from django.db.models.query_utils import (
-    Q, PathInfo, refs_aggregate, refs_expression,
+    PathInfo, Q, refs_aggregate, refs_expression,
 )
 from django.db.models.sql.constants import (
     INNER, LOUTER, ORDER_DIR, ORDER_PATTERN, QUERY_TERMS, SINGLE,
@@ -539,7 +539,8 @@ class Query(object):
             # distinct joins for the same connection in rhs query, then the
             # combined query must have two joins, too.
             reuse.discard(new_alias)
-            change_map[alias] = new_alias
+            if alias != new_alias:
+                change_map[alias] = new_alias
             if not rhs.alias_refcount[alias]:
                 # The alias was unused in the rhs query. Unref it so that it
                 # will be unused in the new query, too. We have to add and

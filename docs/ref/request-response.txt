@@ -29,8 +29,7 @@ HttpRequest objects
 Attributes
 ----------
 
-All attributes should be considered read-only, unless stated otherwise below.
-``session`` is a notable exception.
+All attributes should be considered read-only, unless stated otherwise.
 
 .. attribute:: HttpRequest.scheme
 
@@ -170,29 +169,11 @@ All attributes should be considered read-only, unless stated otherwise below.
     header called ``X-Bender`` would be mapped to the ``META`` key
     ``HTTP_X_BENDER``.
 
-.. attribute:: HttpRequest.user
-
-    An object of type :setting:`AUTH_USER_MODEL` representing the currently
-    logged-in user. If the user isn't currently logged in, ``user`` will be set
-    to an instance of :class:`django.contrib.auth.models.AnonymousUser`. You
-    can tell them apart with
-    :meth:`~django.contrib.auth.models.User.is_authenticated`, like so::
-
-        if request.user.is_authenticated():
-            # Do something for logged-in users.
-        else:
-            # Do something for anonymous users.
-
-    ``user`` is only available if your Django installation has the
-    :class:`~django.contrib.auth.middleware.AuthenticationMiddleware`
-    activated. For more, see :doc:`/topics/auth/index`.
-
-.. attribute:: HttpRequest.session
-
-    A readable-and-writable, dictionary-like object that represents the current
-    session. This is only available if your Django installation has session
-    support activated. See the :doc:`session documentation
-    </topics/http/sessions>` for full details.
+    Note that :djadmin:`runserver` strips all headers with underscores in the
+    name, so you won't see them in ``META``. This prevents header-spoofing
+    based on ambiguity between underscores and dashes both being normalizing to
+    underscores in WSGI environment variables. It matches the behavior of
+    Web servers like Nginx and Apache 2.4+.
 
 .. attribute:: HttpRequest.urlconf
 
@@ -216,6 +197,41 @@ All attributes should be considered read-only, unless stated otherwise below.
     Not defined by Django itself, but if set, the :ttag:`url` template tag
     will use its value as the ``current_app`` argument to
     :func:`~django.core.urlresolvers.reverse()`.
+
+Attributes set by middleware
+----------------------------
+
+Some of the middleware included in Django's contrib apps set attributes on the
+request. If you don't see the attribute on a request, be sure the appropriate
+middleware class is listed in :setting:`MIDDLEWARE_CLASSES`.
+
+.. attribute:: HttpRequest.session
+
+    From the :class:`~django.contrib.sessions.middleware.SessionMiddleware`: A
+    readable and writable, dictionary-like object that represents the current
+    session.
+
+.. attribute:: HttpRequest.site
+
+    From the :class:`~django.contrib.sites.middleware.CurrentSiteMiddleware`:
+    An instance of :class:`~django.contrib.sites.models.Site` or
+    :class:`~django.contrib.sites.requests.RequestSite` as returned by
+    :func:`~django.contrib.sites.shortcuts.get_current_site()`
+    representing the current site.
+
+.. attribute:: HttpRequest.user
+
+    From the :class:`~django.contrib.auth.middleware.AuthenticationMiddleware`:
+    An instance of :setting:`AUTH_USER_MODEL` representing the currently
+    logged-in user. If the user isn't currently logged in, ``user`` will be set
+    to an instance of :class:`~django.contrib.auth.models.AnonymousUser`. You
+    can tell them apart with
+    :meth:`~django.contrib.auth.models.User.is_authenticated`, like so::
+
+        if request.user.is_authenticated():
+            ... # Do something for logged-in users.
+        else:
+            ... # Do something for anonymous users.
 
 Methods
 -------
@@ -325,7 +341,7 @@ Methods
     If a response varies on whether or not it's requested via AJAX and you are
     using some form of caching like Django's :mod:`cache middleware
     <django.middleware.cache>`, you should decorate the view with
-    :func:`vary_on_headers('HTTP_X_REQUESTED_WITH')
+    :func:`vary_on_headers('X-Requested-With')
     <django.views.decorators.vary.vary_on_headers>` so that the responses are
     properly cached.
 
@@ -412,12 +428,12 @@ a subclass of dictionary. Exceptions are outlined here:
     Returns ``True`` if the given key is set. This lets you do, e.g., ``if "foo"
     in request.GET``.
 
-.. method:: QueryDict.get(key, default)
+.. method:: QueryDict.get(key, default=None)
 
     Uses the same logic as ``__getitem__()`` above, with a hook for returning a
     default value if the key doesn't exist.
 
-.. method:: QueryDict.setdefault(key, default)
+.. method:: QueryDict.setdefault(key, default=None)
 
     Just like the standard dictionary ``setdefault()`` method, except it uses
     ``__setitem__()`` internally.
@@ -433,7 +449,7 @@ a subclass of dictionary. Exceptions are outlined here:
         >>> q.getlist('a')
         ['1', '2']
         >>> q['a'] # returns the last
-        ['2']
+        '2'
 
 .. method:: QueryDict.items()
 
@@ -475,7 +491,7 @@ In addition, ``QueryDict`` has the following methods:
     Returns a copy of the object, using ``copy.deepcopy()`` from the Python
     standard library. This copy will be mutable even if the original was not.
 
-.. method:: QueryDict.getlist(key, default)
+.. method:: QueryDict.getlist(key, default=None)
 
     Returns the data with the requested key, as a Python list. Returns an
     empty list if the key doesn't exist and no default value was provided.
@@ -490,7 +506,7 @@ In addition, ``QueryDict`` has the following methods:
 
     Appends an item to the internal list associated with key.
 
-.. method:: QueryDict.setlistdefault(key, default_list)
+.. method:: QueryDict.setlistdefault(key, default_list=None)
 
     Just like ``setdefault``, except it takes a list of values instead of a
     single value.
@@ -534,7 +550,7 @@ In addition, ``QueryDict`` has the following methods:
         >>> q.dict()
         {'a': '5'}
 
-.. method:: QueryDict.urlencode([safe])
+.. method:: QueryDict.urlencode(safe=None)
 
     Returns a string of the data in query-string format. Example::
 
@@ -883,29 +899,27 @@ JsonResponse objects
 
 .. versionadded:: 1.7
 
-.. class:: JsonResponse
+.. class:: JsonResponse(data, encoder=DjangoJSONEncoder, safe=True, **kwargs)
 
-.. method:: JsonResponse.__init__(data, encoder=DjangoJSONEncoder, safe=True, **kwargs)
+    An :class:`HttpResponse` subclass that helps to create a JSON-encoded
+    response. It inherits most behavior from its superclass with a couple
+    differences:
 
-   An :class:`HttpResponse` subclass that helps to create a JSON-encoded
-   response. It inherits most behavior from its superclass with a couple
-   differences:
+    Its default ``Content-Type`` header is set to ``application/json``.
 
-   Its default ``Content-Type`` header is set to ``application/json``.
+    The first parameter, ``data``, should be a ``dict`` instance. If the
+    ``safe`` parameter is set to ``False`` (see below) it can be any
+    JSON-serializable object.
 
-   The first parameter, ``data``, should be a ``dict`` instance. If the ``safe``
-   parameter is set to ``False`` (see below) it can be any JSON-serializable
-   object.
+    The ``encoder``, which defaults to
+    ``django.core.serializers.json.DjangoJSONEncoder``, will be used to
+    serialize the data. See :ref:`JSON serialization
+    <serialization-formats-json>` for more details about this serializer.
 
-   The ``encoder``, which defaults to
-   ``django.core.serializers.json.DjangoJSONEncoder``, will be used to
-   serialize the data. See :ref:`JSON serialization
-   <serialization-formats-json>` for more details about this serializer.
-
-   The ``safe`` boolean parameter defaults to ``True``. If it's set to ``False``,
-   any object can be passed for serialization (otherwise only ``dict`` instances
-   are allowed). If ``safe`` is ``True`` and a non-``dict`` object is passed as
-   the first argument, a :exc:`TypeError` will be raised.
+    The ``safe`` boolean parameter defaults to ``True``. If it's set to
+    ``False``, any object can be passed for serialization (otherwise only
+    ``dict`` instances are allowed). If ``safe`` is ``True`` and a non-``dict``
+    object is passed as the first argument, a :exc:`TypeError` will be raised.
 
 Usage
 -----
@@ -915,7 +929,7 @@ Typical usage could look like::
     >>> from django.http import JsonResponse
     >>> response = JsonResponse({'foo': 'bar'})
     >>> response.content
-    '{"foo": "bar"}'
+    b'{"foo": "bar"}'
 
 
 Serializing non-dictionary objects
@@ -1010,7 +1024,7 @@ Attributes
 FileResponse objects
 ====================
 
-.. versionadded:: 1.8
+.. versionadded:: 1.7.4
 
 .. class:: FileResponse
 

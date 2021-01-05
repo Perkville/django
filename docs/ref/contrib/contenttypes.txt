@@ -196,7 +196,7 @@ The ``ContentTypeManager``
         it's preferred to use this method over the usual
         ``ContentType.objects.get(pk=id)``
 
-    .. method:: get_for_model(model[, for_concrete_model=True])
+    .. method:: get_for_model(model, for_concrete_model=True)
 
         Takes either a model class or an instance of a model, and returns the
         :class:`~django.contrib.contenttypes.models.ContentType` instance
@@ -204,7 +204,7 @@ The ``ContentTypeManager``
         the :class:`~django.contrib.contenttypes.models.ContentType` of a proxy
         model.
 
-    .. method:: get_for_models(*models[, for_concrete_models=True])
+    .. method:: get_for_models(*models, for_concrete_models=True)
 
         Takes a variadic number of model classes, and returns a dictionary
         mapping the model classes to the
@@ -299,18 +299,11 @@ model:
        is ``True``. This mirrors the ``for_concrete_model`` argument to
        :meth:`~django.contrib.contenttypes.models.ContentTypeManager.get_for_model`.
 
-    .. attribute:: GenericForeignKey.allow_unsaved_instance_assignment
-
-        .. versionadded:: 1.8
-
-        Works analogously to :attr:`ForeignKey.allow_unsaved_instance_assignment
-        <django.db.models.ForeignKey.allow_unsaved_instance_assignment>`.
-
     .. deprecated:: 1.7
 
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
-        Support for importing from this old location will be removed in Django
-        1.9.
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.fields``. Support for importing from the
+        old location will be removed in Django 1.9.
 
 .. admonition:: Primary key type compatibility
 
@@ -377,12 +370,6 @@ Reverse generic relations
 
 .. class:: GenericRelation
 
-    .. deprecated:: 1.7
-
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
-        Support for importing from this old location will be removed in Django
-        1.9.
-
     .. attribute:: related_query_name
 
         .. versionadded:: 1.7
@@ -392,8 +379,17 @@ Reverse generic relations
         related object back to this one. This allows querying and filtering
         from the related object.
 
+    .. deprecated:: 1.7
+
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.fields``. Support for importing from the
+        old location will be removed in Django 1.9.
+
 If you know which models you'll be using most often, you can also add
 a "reverse" generic relationship to enable an additional API. For example::
+
+    from django.db import models
+    from django.contrib.contenttypes.fields import GenericRelation
 
     class Bookmark(models.Model):
         url = models.URLField()
@@ -421,7 +417,7 @@ Defining :class:`~django.contrib.contenttypes.fields.GenericRelation` with
 This enables filtering, ordering, and other query operations on ``Bookmark``
 from ``TaggedItem``::
 
-    >>> # Get all tags belonging to books containing `django` in the url
+    >>> # Get all tags belonging to bookmarks containing `django` in the url
     >>> TaggedItem.objects.filter(bookmarks__url__contains='django')
     [<TaggedItem: django>, <TaggedItem: python>]
 
@@ -479,19 +475,12 @@ signal.
 Generic relations and aggregation
 ---------------------------------
 
-:doc:`Django's database aggregation API </topics/db/aggregation>`
-doesn't work with a
+:doc:`Django's database aggregation API </topics/db/aggregation>` works with a
 :class:`~django.contrib.contenttypes.fields.GenericRelation`. For example, you
-might be tempted to try something like::
+can find out how many tags all the bookmarks have::
 
-    Bookmark.objects.aggregate(Count('tags'))
-
-This will not work correctly, however. The generic relation adds extra filters
-to the queryset to ensure the correct content type, but the
-:meth:`~django.db.models.query.QuerySet.aggregate` method doesn't take them
-into account. For now, if you need aggregates on generic relations, you'll
-need to calculate them without using the aggregation API.
-
+    >>> Bookmark.objects.aggregate(Count('tags'))
+    {'tags__count': 3}
 
 .. module:: django.contrib.contenttypes.forms
 
@@ -508,9 +497,9 @@ The :mod:`django.contrib.contenttypes.forms` module provides:
 
     .. deprecated:: 1.7
 
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
-        Support for importing from this old location will be removed in Django
-        1.9.
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.forms``. Support for importing from the
+        old location will be removed in Django 1.9.
 
 .. function:: generic_inlineformset_factory(model, form=ModelForm, formset=BaseGenericInlineFormSet, ct_field="content_type", fk_field="object_id", fields=None, exclude=None, extra=3, can_order=False, can_delete=True, max_num=None, formfield_callback=None, validate_max=False, for_concrete_model=True, min_num=None, validate_min=False)
 
@@ -529,14 +518,13 @@ The :mod:`django.contrib.contenttypes.forms` module provides:
 
     .. deprecated:: 1.7
 
-        This function used to be defined in ``django.contrib.contenttypes.generic``.
-        Support for importing from this old location will be removed in Django
-        1.9.
+        This function was moved from ``django.contrib.contenttypes.generic``
+        to ``django.contrib.contenttypes.forms``. Support for importing from
+        the old location will be removed in Django 1.9.
 
     .. versionchanged:: 1.7
 
         ``min_num`` and ``validate_min`` were added.
-
 
 .. module:: django.contrib.contenttypes.admin
 
@@ -573,9 +561,9 @@ information.
 
     .. deprecated:: 1.7
 
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
-        Support for importing from this old location will be removed in Django
-        1.9.
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.admin``. Support for importing from the
+        old location will be removed in Django 1.9.
 
 .. class:: GenericTabularInline
 .. class:: GenericStackedInline
@@ -585,6 +573,6 @@ information.
 
     .. deprecated:: 1.7
 
-        These classes used to be defined in ``django.contrib.contenttypes.generic``.
-        Support for importing from this old location will be removed in Django
-        1.9.
+        These classes was moved from ``django.contrib.contenttypes.generic``
+        to ``django.contrib.contenttypes.admin``. Support for importing from
+        the old location will be removed in Django 1.9.

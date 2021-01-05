@@ -61,7 +61,7 @@ Database            Library Requirements            Supported Versions  Notes
 PostgreSQL          GEOS, PROJ.4, PostGIS           9.0+                Requires PostGIS.
 MySQL               GEOS                            5.5+                Not OGC-compliant; :ref:`limited functionality <mysql-spatial-limitations>`.
 Oracle              GEOS                            11.1+               XE not supported.
-SQLite              GEOS, GDAL, PROJ.4, SpatiaLite  3.6.+               Requires SpatiaLite 2.3+, pysqlite2 2.5+
+SQLite              GEOS, GDAL, PROJ.4, SpatiaLite  3.6.+               Requires SpatiaLite 2.4+, pysqlite2 2.5+
 ==================  ==============================  ==================  =========================================
 
 See also `this comparison matrix`__ on the OSGeo Wiki for
@@ -96,31 +96,6 @@ Like other Django contrib applications, you will *only* need to add
 :mod:`django.contrib.gis` to :setting:`INSTALLED_APPS` in your settings.
 This is the so that ``gis`` templates can be located -- if not done, then
 features such as the geographic admin or KML sitemaps will not function properly.
-
-.. _addgoogleprojection:
-
-Add Google projection to ``spatial_ref_sys`` table
---------------------------------------------------
-
-.. note::
-
-    If you're running GDAL 1.7 or above (most users), you can skip this step.
-
-In order to conduct database transformations to the so-called "Google"
-projection (a spherical mercator projection used by Google Maps),
-an entry must be added to your spatial database's ``spatial_ref_sys`` table.
-Invoke the Django shell from your project and execute the
-``add_srs_entry`` function:
-
-.. code-block:: pycon
-
-    $ python manage.py shell
-    >>> from django.contrib.gis.utils import add_srs_entry
-    >>> add_srs_entry(900913)
-
-This adds an entry for the 900913 SRID to the ``spatial_ref_sys`` (or equivalent)
-table, making it possible for the spatial database to transform coordinates in
-this projection.  You only need to execute this command *once* per spatial database.
 
 Troubleshooting
 ===============
@@ -214,16 +189,12 @@ Mac OS X
 Because of the variety of packaging systems available for OS X, users have
 several different options for installing GeoDjango. These options are:
 
+* :ref:`postgresapp` (easiest and recommended)
 * :ref:`homebrew`
 * :ref:`kyngchaos`
 * :ref:`fink`
 * :ref:`macports`
 * :ref:`build_from_source`
-
-.. note::
-
-    Currently, the easiest and recommended approach for installing GeoDjango
-    on OS X is to use the KyngChaos packages.
 
 This section also includes instructions for installing an upgraded version
 of :ref:`macosx_python` from packages provided by the Python Software
@@ -251,6 +222,26 @@ __ https://python.org/ftp/python/3.3.2/
     ``python`` is entered at the command-line::
 
         export PATH=/Library/Frameworks/Python.framework/Versions/Current/bin:$PATH
+
+.. _postgresapp:
+
+Postgres.app
+^^^^^^^^^^^^
+
+`Postgres.app <http://postgresapp.com/>`_ is a standalone PostgreSQL server
+that includes the PostGIS extension. You will also need to install ``gdal`` and
+``libgeoip`` with :ref:`homebrew`.
+
+After installing Postgres.app, add the following to your ``.bash_profile`` so
+you can run the package's programs from the command-line. Replace ``X.Y`` with
+the version of PostgreSQL in the Postgres.app you installed:
+
+.. code-block:: bash
+
+    export PATH=$PATH:/Applications/Postgres.app/Contents/Versions/X.Y/bin
+
+You can check if the path is set up correctly by typing ``which psql`` at a
+terminal prompt.
 
 .. _homebrew:
 

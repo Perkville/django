@@ -146,6 +146,30 @@ class SQLiteTests(TestCase):
                 models.Item.objects.all().aggregate,
                 **{'complex': aggregate('last_modified') + aggregate('last_modified')})
 
+    def test_memory_db_test_name(self):
+        """
+        A named in-memory db should be allowed where supported.
+        """
+        from django.db.backends.sqlite3.base import DatabaseWrapper
+        settings_dict = {
+            'TEST': {
+                'NAME': 'file:memorydb_test?mode=memory&cache=shared',
+            }
+        }
+        wrapper = DatabaseWrapper(settings_dict)
+        creation = wrapper.creation
+        if creation.connection.features.can_share_in_memory_db:
+            expected = creation.connection.settings_dict['TEST']['NAME']
+            self.assertEqual(creation._get_test_db_name(), expected)
+        else:
+            msg = (
+                "Using a shared memory database with `mode=memory` in the "
+                "database name is not supported in your environment, "
+                "use `:memory:` instead."
+            )
+            with self.assertRaisesMessage(ImproperlyConfigured, msg):
+                creation._get_test_db_name()
+
 
 @unittest.skipUnless(connection.vendor == 'postgresql', "Test only for PostgreSQL")
 class PostgreSQLTests(TestCase):
@@ -180,6 +204,7 @@ class PostgreSQLTests(TestCase):
         with warnings.catch_warnings(record=True) as w:
             with mock.patch('django.db.backends.base.base.BaseDatabaseWrapper.connect',
                             side_effect=mocked_connect, autospec=True):
+                warnings.simplefilter('always', RuntimeWarning)
                 nodb_conn = connection._nodb_connection
         del connection._nodb_connection
         self.assertIsNotNone(nodb_conn.settings_dict['NAME'])
@@ -268,6 +293,7 @@ class PostgreSQLTests(TestCase):
         """
         Regression test for #18130 and #24318.
         """
+        import psycopg2
         from psycopg2.extensions import (
             ISOLATION_LEVEL_READ_COMMITTED as read_committed,
             ISOLATION_LEVEL_SERIALIZABLE as serializable,
@@ -278,7 +304,8 @@ class PostgreSQLTests(TestCase):
         # PostgreSQL is configured with the default isolation level.
 
         # Check the level on the psycopg2 connection, not the Django wrapper.
-        self.assertEqual(connection.connection.isolation_level, read_committed)
+        default_level = read_committed if psycopg2.__version__ < '2.7' else None
+        self.assertEqual(connection.connection.isolation_level, default_level)
 
         databases = copy.deepcopy(settings.DATABASES)
         databases[DEFAULT_DB_ALIAS]['OPTIONS']['isolation_level'] = serializable
@@ -778,6 +805,11 @@ class BackendTestCase(TransactionTestCase):
         finally:
             BaseDatabaseWrapper.queries_limit = old_queries_limit
             new_connection.close()
+
+    def test_timezone_none_use_tz_false(self):
+        connection.ensure_connection()
+        with self.settings(TIME_ZONE=None, USE_TZ=False):
+            connection.init_connection_state()
 
 
 # We don't make these tests conditional because that means we would need to

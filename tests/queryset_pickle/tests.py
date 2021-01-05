@@ -2,10 +2,8 @@ from __future__ import unicode_literals
 
 import datetime
 import pickle
-import warnings
 
 from django.test import TestCase
-from django.utils.encoding import force_text
 from django.utils.version import get_version
 
 from .models import Container, Event, Group, Happening, M2MModel
@@ -61,7 +59,7 @@ class PickleabilityTestCase(TestCase):
 
     def test_model_pickle(self):
         """
-        Test that a model not defined on module level is pickleable.
+        Test that a model not defined on module level is picklable.
         """
         original = Container.SomeModel(pk=1)
         dumped = pickle.dumps(original)
@@ -140,11 +138,9 @@ class PickleabilityTestCase(TestCase):
         unpickled without a Django version
         """
         qs = Group.missing_django_version_objects.all()
-        with warnings.catch_warnings(record=True) as recorded:
+        msg = "Pickled queryset instance's Django version is not specified."
+        with self.assertRaisesMessage(RuntimeWarning, msg):
             pickle.loads(pickle.dumps(qs))
-            msg = force_text(recorded.pop().message)
-            self.assertEqual(msg,
-                "Pickled queryset instance's Django version is not specified.")
 
     def test_unsupported_unpickle(self):
         """
@@ -152,11 +148,6 @@ class PickleabilityTestCase(TestCase):
         unpickled with a different Django version than the current
         """
         qs = Group.previous_django_version_objects.all()
-        with warnings.catch_warnings(record=True) as recorded:
+        msg = "Pickled queryset instance's Django version 1.0 does not match the current version %s." % get_version()
+        with self.assertRaisesMessage(RuntimeWarning, msg):
             pickle.loads(pickle.dumps(qs))
-            msg = force_text(recorded.pop().message)
-            self.assertEqual(
-                msg,
-                "Pickled queryset instance's Django version 1.0 does not "
-                "match the current version %s." % get_version()
-            )

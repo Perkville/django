@@ -171,7 +171,7 @@ and the :setting:`SECRET_KEY` setting.
     Finally, the size of a cookie can have an impact on the `speed of your site`_.
 
 .. _`common limit of 4096 bytes`: http://tools.ietf.org/html/rfc2965#section-5.3
-.. _`replay attacks`: http://en.wikipedia.org/wiki/Replay_attack
+.. _`replay attacks`: https://en.wikipedia.org/wiki/Replay_attack
 .. _`speed of your site`: http://yuiblog.com/blog/2007/03/01/performance-research-part-3/
 
 Using sessions in views
@@ -505,15 +505,6 @@ An API is available to manipulate session data outside of a view::
     >>> s = SessionStore(session_key='2b1189a188b44ad18c35e113ac6ceead')
     >>> s['last_login']
     1376587691
-
-In order to mitigate session fixation attacks, sessions keys that don't exist
-are regenerated::
-
-    >>> from django.contrib.sessions.backends.db import SessionStore
-    >>> s = SessionStore(session_key='no-such-session-here')
-    >>> s.save()
-    >>> s.session_key
-    'ff882814010ccbc3c870523934fee5a2'
 
 If you're using the ``django.contrib.sessions.backends.db`` backend, each
 session is just a normal Django model. The ``Session`` model is defined in
